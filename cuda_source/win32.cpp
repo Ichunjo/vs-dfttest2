@@ -16,6 +16,7 @@
 #include <vector>
 
 #define DLL_DIR L"vsmlrt-cuda"
+#define NVIDIA_CUDA_DIR L"../../../nvidia/cu13/bin/x86_64"
 
 #include <iostream>
 
@@ -45,14 +46,20 @@ static fs::path dllDir() {
 }
 
 FARPROC loadDLLs(std::string dll) {
-    fs::path p = dllDir() / DLL_DIR / dll;
-    std::wstring s = p;
+    std::wstring wdll(dll.begin(), dll.end());
+    std::vector<fs::path> dirs = {dllDir() / DLL_DIR, dllDir() / NVIDIA_CUDA_DIR};
     HMODULE h = nullptr;
-    h = LoadLibraryW(s.c_str());
-    if (getenv("VS_DFTTEST2_VERBOSE"))
-        std::wcerr << L"vs-dfttest2: preloading " << p << L": " << h << std::endl;
+    for (const auto& dir : dirs) {
+        fs::path p = dir / wdll;
+        h = LoadLibraryW(p.c_str());
+        if (getenv("VS_DFTTEST2_VERBOSE"))
+            std::wcerr << L"vs-dfttest2: preloading " << p << L": " << h << std::endl;
+        if (h)
+            break;
+    }
     if (!h) {
-        std::wcerr << L"vs-dfttest2: failed to preload " << p << std::endl;
+        std::wcerr << L"vs-dfttest2: failed to preload " << wdll << L" from search paths, falling back to default"
+                   << std::endl;
         h = LoadLibraryA(dll.c_str());
     }
     if (!h)
