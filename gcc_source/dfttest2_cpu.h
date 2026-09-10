@@ -9,12 +9,12 @@
 #include <thread>
 #include <unordered_map>
 
-#include <VapourSynth.h>
-#include <VSHelper.h>
+#include <VapourSynth4.h>
+#include <VSHelper4.h>
 
 
 static inline void vs_aligned_free_float(float * ptr) {
-    vs_aligned_free(static_cast<void *>(ptr));
+    vsh::vsh_aligned_free(static_cast<void *>(ptr));
 }
 
 
@@ -25,7 +25,7 @@ struct DFTTestThreadData {
 
 
 struct DFTTestData {
-    VSNodeRef * node;
+    VSNode * node;
     int radius;
     int block_size;
     int block_step;
@@ -44,8 +44,8 @@ struct DFTTestData {
     std::shared_mutex thread_data_lock;
 };
 
-extern const VSFrameRef *VS_CC DFTTestGetFrame(
-    int n, int activationReason, void **instanceData, void **frameData,
+extern const VSFrame *VS_CC DFTTestGetFrame(
+    int n, int activationReason, void *instanceData, void **frameData,
     VSFrameContext *frameCtx, VSCore *core, const VSAPI *vsapi
 ) noexcept;
 

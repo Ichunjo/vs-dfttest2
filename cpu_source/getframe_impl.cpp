@@ -4,7 +4,7 @@
 #include <mutex>
 #include <vector>
 
-#include <VSHelper.h>
+#include <VSHelper4.h>
 
 #include "dfttest2_cpu.h"
 #include "kernel.hpp"
@@ -38,7 +38,7 @@ static inline void reflection_padding_impl(
     int offset_y = (pad_height - height) / 2;
     int offset_x = (pad_width - width) / 2;
 
-    vs_bitblt(
+    vsh::bitblt(
         &dst[offset_y * pad_width + offset_x], pad_width * sizeof(T),
         src, stride * sizeof(T),
         width * sizeof(T), height
@@ -231,18 +231,18 @@ static inline void store_frame(
 }
 
 
-const VSFrameRef * VS_CC
+const VSFrame * VS_CC
 #ifndef HAS_DISPATCH
 DFTTestGetFrame
 #else // HAS_DISPATCH
 DFTTEST_GETFRAME_NAME
 #endif // HAS_DISPATCH
 (
-    int n, int activationReason, void **instanceData, void **frameData,
+    int n, int activationReason, void *instanceData, void **frameData,
     VSFrameContext *frameCtx, VSCore *core, const VSAPI *vsapi
 ) noexcept {
 
-    auto d = static_cast<DFTTestData *>(*instanceData);
+    auto d = static_cast<DFTTestData *>(instanceData);
 
     if (activationReason == arInitial) {
         int start = std::max(n - d->radius, 0);
@@ -284,7 +284,7 @@ DFTTEST_GETFRAME_NAME
                 (2 * d->radius + 1) *
                 calc_pad_size(vi->height, d->block_size, d->block_step) *
                 calc_pad_size(vi->width, d->block_size, d->block_step) *
-                vi->format->bytesPerSample
+                vi->format.bytesPerSample
             );
 
             thread_data.padded = static_cast<uint8_t *>(std::malloc(padded_size));
@@ -303,37 +303,33 @@ DFTTEST_GETFRAME_NAME
         }
     }
 
-    std::vector<std::unique_ptr<const VSFrameRef, decltype(vsapi->freeFrame)>> src_frames;
+    std::vector<const VSFrame *> src_frames;
     src_frames.reserve(2 * d->radius + 1);
     for (int i = n - d->radius; i <= n + d->radius; i++) {
-        src_frames.emplace_back(
-            vsapi->getFrameFilter(std::clamp(i, 0, vi->numFrames - 1), d->node, frameCtx),
-            vsapi->freeFrame
+        src_frames.push_back(
+            vsapi->getFrameFilter(std::clamp(i, 0, vi->numFrames - 1), d->node, frameCtx)
         );
     }
 
-    auto & src_center_frame = src_frames[d->radius];
-    auto format = vsapi->getFrameFormat(src_center_frame.get());
+    auto src_center_frame = src_frames[d->radius];
+    auto format = vsapi->getVideoFrameFormat(src_center_frame);
 
-    const VSFrameRef * fr[] {
-        d->process[0] ? nullptr : src_center_frame.get(),
-        d->process[1] ? nullptr : src_center_frame.get(),
-        d->process[2] ? nullptr : src_center_frame.get()
+    const VSFrame * fr[] {
+        d->process[0] ? nullptr : src_center_frame,
+        d->process[1] ? nullptr : src_center_frame,
+        d->process[2] ? nullptr : src_center_frame
     };
     const int pl[] { 0, 1, 2 };
-    std::unique_ptr<VSFrameRef, decltype(vsapi->freeFrame)> dst_frame {
-        vsapi->newVideoFrame2(format, vi->width, vi->height, fr, pl, src_center_frame.get(), core),
-        vsapi->freeFrame
-    };
+    VSFrame * dst_frame = vsapi->newVideoFrame2(format, vi->width, vi->height, fr, pl, src_center_frame, core);
 
     for (int plane = 0; plane < format->numPlanes; plane++) {
         if (!d->process[plane]) {
             continue;
         }
 
-        int width = vsapi->getFrameWidth(src_center_frame.get(), plane);
-        int height = vsapi->getFrameHeight(src_center_frame.get(), plane);
-        int stride = vsapi->getStride(src_center_frame.get(), plane) / vi->format->bytesPerSample;
+        int width = vsapi->getFrameWidth(src_center_frame, plane);
+        int height = vsapi->getFrameHeight(src_center_frame, plane);
+        int stride = static_cast<int>(vsapi->getStride(src_center_frame, plane) / vi->format.bytesPerSample);
 
         int padded_size_spatial = (
             calc_pad_size(height, d->block_size, d->block_step) *
@@ -347,13 +343,13 @@ DFTTEST_GETFRAME_NAME
         );
 
         for (int i = 0; i < 2 * d->radius + 1; i++) {
-            auto srcp = vsapi->getReadPtr(src_frames[i].get(), plane);
+            auto srcp = vsapi->getReadPtr(src_frames[i], plane);
             reflection_padding(
-                &thread_data.padded[(i * padded_size_spatial) * vi->format->bytesPerSample],
+                &thread_data.padded[(i * padded_size_spatial) * vi->format.bytesPerSample],
                 srcp,
                 width, height, stride,
                 d->block_size, d->block_step,
-                vi->format->bytesPerSample
+                vi->format.bytesPerSample
             );
         }
 
@@ -368,11 +364,11 @@ DFTTEST_GETFRAME_NAME
 
                 load_block(
                     block,
-                    &thread_data.padded[(i * offset_x + j) * d->block_step * vi->format->bytesPerSample],
+                    &thread_data.padded[(i * offset_x + j) * d->block_step * vi->format.bytesPerSample],
                     d->radius, d->block_size, d->block_step,
                     width, height,
                     reinterpret_cast<const Vec16f *>(d->window.get()),
-                    vi->format->bitsPerSample
+                    vi->format.bitsPerSample
                 );
 
                 fused(
@@ -403,7 +399,7 @@ DFTTEST_GETFRAME_NAME
         int offset_y = (pad_height - height) / 2;
         int offset_x = (pad_width - width) / 2;
 
-        auto dstp = vsapi->getWritePtr(dst_frame.get(), plane);
+        auto dstp = vsapi->getWritePtr(dst_frame, plane);
         store_frame(
             dstp,
             &thread_data.padded2[(offset_y * pad_width + offset_x)],
@@ -411,13 +407,17 @@ DFTTEST_GETFRAME_NAME
             height,
             stride,
             pad_width,
-            vi->format->bitsPerSample
+            vi->format.bitsPerSample
         );
+    }
+
+    for (auto frame : src_frames) {
+        vsapi->freeFrame(frame);
     }
 
     set_control_word(mxcsr);
 
-    return dst_frame.release();
+    return dst_frame;
 }
 
 
