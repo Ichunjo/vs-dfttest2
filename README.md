@@ -4,6 +4,7 @@ DFTTest re-implemetation (CUDA and x86)
 ## Usage
 ```python3
 from dfttest2 import DFTTest
+
 output = DFTTest(input)
 ```
 
