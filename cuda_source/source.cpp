@@ -1,3 +1,5 @@
+#include <VSHelper4.h>
+#include <VapourSynth4.h>
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -20,9 +22,6 @@
 #include <variant>
 #include <vector>
 
-#include <VapourSynth4.h>
-#include <VSHelper4.h>
-
 #ifndef PLUGIN_VERSION_MAJOR
 #define PLUGIN_VERSION_MAJOR 1
 #endif
@@ -41,18 +40,12 @@
 
 // real/complex-input DFT
 template <typename T, typename T_in>
-    requires
-        (std::is_same_v<T_in, T> || std::is_same_v<T_in, std::complex<T>>)
-static void dft(
-    std::complex<T> * VS_RESTRICT dst,
-    const T_in * VS_RESTRICT src,
-    int n,
-    int stride
-) {
+    requires(std::is_same_v<T_in, T> || std::is_same_v<T_in, std::complex<T>>)
+static void dft(std::complex<T>* VS_RESTRICT dst, const T_in* VS_RESTRICT src, int n, int stride) {
 
     int out_num = std::is_floating_point_v<T_in> ? (n / 2 + 1) : n;
     for (int i = 0; i < out_num; i++) {
-        std::complex<T> sum {};
+        std::complex<T> sum{};
         for (int j = 0; j < n; j++) {
             auto imag = -2 * i * j * std::numbers::pi_v<T> / n;
             auto weight = std::complex(std::cos(imag), std::sin(imag));
@@ -72,86 +65,86 @@ static bool success(nvrtcResult result) {
     return result == NVRTC_SUCCESS;
 }
 
-static const char * get_error(CUresult error) {
-    const char * error_message;
+static const char* get_error(CUresult error) {
+    const char* error_message;
     if (cuGetErrorString(error, &error_message) == CUDA_SUCCESS) [[likely]] {
         return error_message;
     }
     return "unknown cuda error";
 }
 
-static const char * get_error(cufftResult_t error) {
+static const char* get_error(cufftResult_t error) {
     switch (error) {
-        case CUFFT_SUCCESS:
-            return "success";
-        case CUFFT_INVALID_PLAN:
-            return "invalid plan handle";
-        case CUFFT_ALLOC_FAILED:
-            return "failed to allocate memory";
-        case CUFFT_INVALID_TYPE:
-            return "invalid type";
-        case CUFFT_INVALID_VALUE:
-            return "invalid value";
-        case CUFFT_INTERNAL_ERROR:
-            return "internal error";
-        case CUFFT_EXEC_FAILED:
-            return "execution failed";
-        case CUFFT_SETUP_FAILED:
-            return "the cuFFT library failed to initialize";
-        case CUFFT_INVALID_SIZE:
-            return "invalid transform size";
-        case CUFFT_UNALIGNED_DATA:
-            return "unaligned data";
+    case CUFFT_SUCCESS:
+        return "success";
+    case CUFFT_INVALID_PLAN:
+        return "invalid plan handle";
+    case CUFFT_ALLOC_FAILED:
+        return "failed to allocate memory";
+    case CUFFT_INVALID_TYPE:
+        return "invalid type";
+    case CUFFT_INVALID_VALUE:
+        return "invalid value";
+    case CUFFT_INTERNAL_ERROR:
+        return "internal error";
+    case CUFFT_EXEC_FAILED:
+        return "execution failed";
+    case CUFFT_SETUP_FAILED:
+        return "the cuFFT library failed to initialize";
+    case CUFFT_INVALID_SIZE:
+        return "invalid transform size";
+    case CUFFT_UNALIGNED_DATA:
+        return "unaligned data";
 #if CUFFT_VERSION < 12000
-        case CUFFT_INCOMPLETE_PARAMETER_LIST:
-            return "missing parameters in call";
+    case CUFFT_INCOMPLETE_PARAMETER_LIST:
+        return "missing parameters in call";
 #endif
-        case CUFFT_INVALID_DEVICE:
-            return "invalid device: execution of a plan was on different GPU than plan creation";
+    case CUFFT_INVALID_DEVICE:
+        return "invalid device: execution of a plan was on different GPU than plan creation";
 #if CUFFT_VERSION < 12000
-        case CUFFT_PARSE_ERROR:
-            return "internal plan database error";
+    case CUFFT_PARSE_ERROR:
+        return "internal plan database error";
 #endif
-        case CUFFT_NO_WORKSPACE:
-            return "no workspace has been provided prior to plan execution";
-        case CUFFT_NOT_IMPLEMENTED:
-            return "functionality not implemented";
-        case CUFFT_NOT_SUPPORTED:
-            return "operation not supported";
+    case CUFFT_NO_WORKSPACE:
+        return "no workspace has been provided prior to plan execution";
+    case CUFFT_NOT_IMPLEMENTED:
+        return "functionality not implemented";
+    case CUFFT_NOT_SUPPORTED:
+        return "operation not supported";
 #if CUFFT_VERSION >= 12000
-        case CUFFT_MISSING_DEPENDENCY:
-            return "missing dependency";
-        case CUFFT_NVRTC_FAILURE:
-            return "nvrtc failure";
-        case CUFFT_NVJITLINK_FAILURE:
-            return "nvjitlink failure";
-        case CUFFT_NVSHMEM_FAILURE:
-            return "nvshmem failure";
+    case CUFFT_MISSING_DEPENDENCY:
+        return "missing dependency";
+    case CUFFT_NVRTC_FAILURE:
+        return "nvrtc failure";
+    case CUFFT_NVJITLINK_FAILURE:
+        return "nvjitlink failure";
+    case CUFFT_NVSHMEM_FAILURE:
+        return "nvshmem failure";
 #endif
-        default:
-            return "unknown";
+    default:
+        return "unknown";
     }
 }
 
-static const char * get_error(nvrtcResult error) {
+static const char* get_error(nvrtcResult error) {
     return nvrtcGetErrorString(error);
 }
 
-#define showError(expr) show_error_impl(expr, # expr, __LINE__)
-template <typename T>
-static void show_error_impl(T result, const char * source, int line_no) {
+#define showError(expr) show_error_impl(expr, #expr, __LINE__)
+template <typename T> static void show_error_impl(T result, const char* source, int line_no) {
     if (!success(result)) [[unlikely]] {
         std::fprintf(stderr, "[%d] %s failed: %s\n", line_no, source, get_error(result));
     }
 }
 
-#define checkError(expr) do {                                                       \
-    if (auto result = expr; !success(result)) [[unlikely]] {                        \
-        std::ostringstream error;                                                   \
-        error << '[' << __LINE__ << "] '" # expr "' failed: " << get_error(result); \
-        return set_error(error.str().c_str());                                      \
-    }                                                                               \
-} while (0)
+#define checkError(expr)                                                                                               \
+    do {                                                                                                               \
+        if (auto result = expr; !success(result)) [[unlikely]] {                                                       \
+            std::ostringstream error;                                                                                  \
+            error << '[' << __LINE__ << "] '" #expr "' failed: " << get_error(result);                                 \
+            return set_error(error.str().c_str());                                                                     \
+        }                                                                                                              \
+    } while (0)
 
 static void cuStreamDestroyCustom(CUstream stream) {
     showError(cuStreamDestroy(stream));
@@ -165,7 +158,7 @@ static void cuMemFreeCustom(CUdeviceptr p) {
     showError(cuMemFree(p));
 }
 
-static void cuMemFreeHostCustom(void * p) {
+static void cuMemFreeHostCustom(void* p) {
     showError(cuMemFreeHost(p));
 }
 
@@ -177,16 +170,14 @@ static void cufftDestroyCustom(cufftHandle handle) {
     showError(cufftDestroy(handle));
 }
 
-static void nvrtcDestroyProgramCustom(nvrtcProgram * program) {
+static void nvrtcDestroyProgramCustom(nvrtcProgram* program) {
     showError(nvrtcDestroyProgram(program));
 }
 
 struct context_releaser {
-    bool * context_retained {};
-    CUdevice device {};
-    void release() {
-        context_retained = nullptr;
-    }
+    bool* context_retained{};
+    CUdevice device{};
+    void release() { context_retained = nullptr; }
     ~context_releaser() {
         if (context_retained && *context_retained) {
             showError(cuDevicePrimaryCtxRelease(device));
@@ -195,7 +186,7 @@ struct context_releaser {
 };
 
 struct context_popper {
-    bool * context_pushed {};
+    bool* context_pushed{};
     ~context_popper() {
         if (!context_pushed || *context_pushed) {
             showError(cuCtxPopCurrent(nullptr));
@@ -204,11 +195,9 @@ struct context_popper {
 };
 
 struct node_freer {
-    const VSAPI * & vsapi;
-    VSNode * node {};
-    void release() {
-        node = nullptr;
-    }
+    const VSAPI*& vsapi;
+    VSNode* node{};
+    void release() { node = nullptr; }
     ~node_freer() {
         if (node) {
             vsapi->freeNode(node);
@@ -216,13 +205,10 @@ struct node_freer {
     }
 };
 
-template <typename T, auto deleter, bool unsafe=false>
-    requires
-        std::default_initializable<T> &&
-        std::is_trivially_copy_assignable_v<T> &&
-        std::convertible_to<T, bool> &&
-        std::invocable<decltype(deleter), T> &&
-        (std::is_pointer_v<T> || unsafe) // e.g. CUdeviceptr is not a pointer
+template <typename T, auto deleter, bool unsafe = false>
+    requires std::default_initializable<T> && std::is_trivially_copy_assignable_v<T> && std::convertible_to<T, bool> &&
+             std::invocable<decltype(deleter), T> &&
+             (std::is_pointer_v<T> || unsafe) // e.g. CUdeviceptr is not a pointer
 struct Resource {
     T data;
 
@@ -230,12 +216,11 @@ struct Resource {
 
     [[nodiscard]] constexpr Resource(T x) noexcept : data(x) {}
 
-    [[nodiscard]] constexpr Resource(Resource&& other) noexcept
-            : data(std::exchange(other.data, T{}))
-    { }
+    [[nodiscard]] constexpr Resource(Resource&& other) noexcept : data(std::exchange(other.data, T{})) {}
 
     Resource& operator=(Resource&& other) noexcept {
-        if (this == &other) return *this;
+        if (this == &other)
+            return *this;
         deleter_(data);
         data = std::exchange(other.data, T{});
         return *this;
@@ -245,9 +230,7 @@ struct Resource {
 
     Resource(const Resource& other) = delete;
 
-    constexpr operator T() const noexcept {
-        return data;
-    }
+    constexpr operator T() const noexcept { return data; }
 
     constexpr auto deleter_(T x) noexcept {
         if (x) {
@@ -262,21 +245,17 @@ struct Resource {
         return *this;
     }
 
-    constexpr ~Resource() noexcept {
-        deleter_(data);
-    }
+    constexpr ~Resource() noexcept { deleter_(data); }
 };
 
-template <typename T>
-static T square(const T & x) {
+template <typename T> static T square(const T& x) {
     return x * x;
 }
 
 static int calc_pad_size(int size, int block_size, int block_step) {
     return (
-        size
-        + ((size % block_size) ? block_size - size % block_size : 0)
-        + std::max(block_size - block_step, block_step) * 2
+        size + ((size % block_size) ? block_size - size % block_size : 0) +
+        std::max(block_size - block_step, block_step) * 2
     );
 }
 
@@ -286,10 +265,13 @@ static int calc_pad_num(int size, int block_size, int block_step) {
 
 template <typename T>
 static void reflection_padding_impl(
-    T * VS_RESTRICT dst, // shape: (pad_height, pad_width)
-    const T * VS_RESTRICT src, // shape: (height, stride)
-    int width, int height, int stride,
-    int block_size, int block_step
+    T* VS_RESTRICT dst,       // shape: (pad_height, pad_width)
+    const T* VS_RESTRICT src, // shape: (height, stride)
+    int width,
+    int height,
+    int stride,
+    int block_size,
+    int block_step
 ) {
 
     int pad_width = calc_pad_size(width, block_size, block_step);
@@ -299,9 +281,7 @@ static void reflection_padding_impl(
     int offset_x = (pad_width - width) / 2;
 
     vsh::bitblt(
-        &dst[offset_y * pad_width + offset_x], pad_width * sizeof(T),
-        src, stride * sizeof(T),
-        width * sizeof(T), height
+        &dst[offset_y * pad_width + offset_x], pad_width * sizeof(T), src, stride * sizeof(T), width * sizeof(T), height
     );
 
     // copy left and right regions
@@ -319,57 +299,55 @@ static void reflection_padding_impl(
 
     // copy top region
     for (int y = 0; y < offset_y; y++) {
-        std::memcpy(
-            &dst[y * pad_width],
-            &dst[(offset_y * 2 - y) * pad_width],
-            pad_width * sizeof(T)
-        );
+        std::memcpy(&dst[y * pad_width], &dst[(offset_y * 2 - y) * pad_width], pad_width * sizeof(T));
     }
 
     // copy bottom region
     for (int y = offset_y + height; y < pad_height; y++) {
-        std::memcpy(
-            &dst[y * pad_width],
-            &dst[(2 * (offset_y + height) - 2 - y) * pad_width],
-            pad_width * sizeof(T)
-        );
+        std::memcpy(&dst[y * pad_width], &dst[(2 * (offset_y + height) - 2 - y) * pad_width], pad_width * sizeof(T));
     }
 }
 
 static void reflection_padding(
-    uint8_t * VS_RESTRICT dst, // shape: (pad_height, pad_width)
-    const uint8_t * VS_RESTRICT src, // shape: (height, stride)
-    int width, int height, int stride,
-    int block_size, int block_step,
+    uint8_t* VS_RESTRICT dst,       // shape: (pad_height, pad_width)
+    const uint8_t* VS_RESTRICT src, // shape: (height, stride)
+    int width,
+    int height,
+    int stride,
+    int block_size,
+    int block_step,
     int bytes_per_sample
 ) {
 
     if (bytes_per_sample == 1) {
         reflection_padding_impl(
-            static_cast<uint8_t *>(dst),
-            static_cast<const uint8_t *>(src),
-            width, height, stride,
-            block_size, block_step
+            static_cast<uint8_t*>(dst), static_cast<const uint8_t*>(src), width, height, stride, block_size, block_step
         );
     } else if (bytes_per_sample == 2) {
         reflection_padding_impl(
-            reinterpret_cast<uint16_t *>(dst),
-            reinterpret_cast<const uint16_t *>(src),
-            width, height, stride,
-            block_size, block_step
+            reinterpret_cast<uint16_t*>(dst),
+            reinterpret_cast<const uint16_t*>(src),
+            width,
+            height,
+            stride,
+            block_size,
+            block_step
         );
     } else if (bytes_per_sample == 4) {
         reflection_padding_impl(
-            reinterpret_cast<uint32_t *>(dst),
-            reinterpret_cast<const uint32_t *>(src),
-            width, height, stride,
-            block_size, block_step
+            reinterpret_cast<uint32_t*>(dst),
+            reinterpret_cast<const uint32_t*>(src),
+            width,
+            height,
+            stride,
+            block_size,
+            block_step
         );
     }
 }
 
 static std::variant<CUmodule, std::string> compile(
-    const char * user_kernel,
+    const char* user_kernel,
     CUdevice device,
     int radius,
     int block_size,
@@ -381,9 +359,7 @@ static std::variant<CUmodule, std::string> compile(
     int bits_per_sample
 ) {
 
-    auto set_error = [](const char * error_message) -> std::string {
-        return std::string{ error_message };
-    };
+    auto set_error = [](const char* error_message) -> std::string { return std::string{error_message}; };
 
     int major;
     checkError(cuDeviceGetAttribute(&major, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR, device));
@@ -394,7 +370,7 @@ static std::variant<CUmodule, std::string> compile(
     // find maximum supported architecture
     int num_archs;
     checkError(nvrtcGetNumSupportedArchs(&num_archs));
-    const auto supported_archs = std::make_unique<int []>(num_archs);
+    const auto supported_archs = std::make_unique<int[]>(num_archs);
     checkError(nvrtcGetSupportedArchs(supported_archs.get()));
 
     bool generate_cubin = compute_capability <= supported_archs[num_archs - 1];
@@ -403,12 +379,12 @@ static std::variant<CUmodule, std::string> compile(
     kernel_source << "#define RADIUS " << radius << '\n';
     kernel_source << "#define BLOCK_SIZE " << block_size << '\n';
     kernel_source << "#define BLOCK_STEP " << block_step << '\n';
-    kernel_source << "#define IN_PLACE " << (int) in_place << '\n';
+    kernel_source << "#define IN_PLACE " << (int)in_place << '\n';
     kernel_source << "#define WARP_SIZE " << warp_size << '\n';
     kernel_source << "#define WARPS_PER_BLOCK " << warps_per_block << '\n';
     if (sample_type == stInteger) {
         int bytes_per_sample = bits_per_sample / 8;
-        const char * type {};
+        const char* type{};
         if (bytes_per_sample == 1) {
             type = "unsigned char";
         } else if (bytes_per_sample == 2) {
@@ -430,22 +406,16 @@ static std::variant<CUmodule, std::string> compile(
 
     nvrtcProgram program;
     checkError(nvrtcCreateProgram(&program, kernel_source.str().c_str(), nullptr, 0, nullptr, nullptr));
-    Resource<nvrtcProgram *, nvrtcDestroyProgramCustom> destroyer { &program };
+    Resource<nvrtcProgram*, nvrtcDestroyProgramCustom> destroyer{&program};
 
     const std::string arch_str = {
-        generate_cubin ?
-        "-arch=sm_" + std::to_string(compute_capability) :
-        "-arch=compute_" + std::to_string(supported_archs[num_archs - 1])
+        generate_cubin ? "-arch=sm_" + std::to_string(compute_capability)
+                       : "-arch=compute_" + std::to_string(supported_archs[num_archs - 1])
     };
 
-    const char * opts[] = {
-        arch_str.c_str(),
-        "-use_fast_math",
-        "-std=c++17",
-        "-modify-stack-limit=false"
-    };
+    const char* opts[] = {arch_str.c_str(), "-use_fast_math", "-std=c++17", "-modify-stack-limit=false"};
 
-    auto compilation = nvrtcCompileProgram(program, (int) std::extent_v<decltype(opts)>, opts);
+    auto compilation = nvrtcCompileProgram(program, (int)std::extent_v<decltype(opts)>, opts);
 
     size_t log_size;
     showError(nvrtcGetProgramLogSize(program, &log_size));
@@ -464,7 +434,7 @@ static std::variant<CUmodule, std::string> compile(
         return error_message;
     }
 
-    std::unique_ptr<char []> image;
+    std::unique_ptr<char[]> image;
     if (generate_cubin) {
         size_t cubin_size;
         checkError(nvrtcGetCUBINSize(program, &cubin_size));
@@ -483,14 +453,12 @@ static std::variant<CUmodule, std::string> compile(
     return module;
 }
 
-
 struct DFTTestThreadData {
-    uint8_t * h_padded; // shape: (pad_height, pad_width)
+    uint8_t* h_padded; // shape: (pad_height, pad_width)
 };
 
-
 struct DFTTestData {
-    VSNode * node;
+    VSNode* node;
     int radius;
     int block_size;
     int block_step;
@@ -540,18 +508,24 @@ struct DFTTestData {
 };
 
 struct FrameFreer {
-    const VSAPI *vsapi;
-    void operator()(const VSFrame *f) const noexcept {
-        if (f) vsapi->freeFrame(f);
+    const VSAPI* vsapi;
+    void operator()(const VSFrame* f) const noexcept {
+        if (f)
+            vsapi->freeFrame(f);
     }
 };
 
-static const VSFrame *VS_CC DFTTestGetFrame(
-    int n, int activationReason, void *instanceData, void **frameData,
-    VSFrameContext *frameCtx, VSCore *core, const VSAPI *vsapi
+static const VSFrame* VS_CC DFTTestGetFrame(
+    int n,
+    int activationReason,
+    void* instanceData,
+    void** frameData,
+    VSFrameContext* frameCtx,
+    VSCore* core,
+    const VSAPI* vsapi
 ) noexcept {
 
-    auto d = static_cast<DFTTestData *>(instanceData);
+    auto d = static_cast<DFTTestData*>(instanceData);
 
     if (activationReason == arInitial) {
         int start = std::max(n - d->radius, 0);
@@ -565,7 +539,7 @@ static const VSFrame *VS_CC DFTTestGetFrame(
         return nullptr;
     }
 
-    auto set_error = [vsapi, frameCtx](const char * error_message) -> std::nullptr_t {
+    auto set_error = [vsapi, frameCtx](const char* error_message) -> std::nullptr_t {
         vsapi->setFilterError(error_message, frameCtx);
         return nullptr;
     };
@@ -579,32 +553,29 @@ static const VSFrame *VS_CC DFTTestGetFrame(
 
     auto thread_id = std::this_thread::get_id();
     if (d->num_uninitialized_threads.load(std::memory_order_acquire) == 0) {
-        const auto & const_data = d->thread_data;
+        const auto& const_data = d->thread_data;
         thread_data = const_data.at(thread_id);
     } else {
         bool initialized = true;
 
         d->thread_data_lock.lock_shared();
         try {
-            const auto & const_data = d->thread_data;
+            const auto& const_data = d->thread_data;
             thread_data = const_data.at(thread_id);
-        } catch (const std::out_of_range &) {
+        } catch (const std::out_of_range&) {
             initialized = false;
         }
         d->thread_data_lock.unlock_shared();
 
         if (!initialized) {
-            auto padded_size = (
-                (2 * d->radius + 1) *
-                calc_pad_size(vi->height, d->block_size, d->block_step) *
-                calc_pad_size(vi->width, d->block_size, d->block_step) *
-                vi->format.bytesPerSample
-            );
+            auto padded_size =
+                ((2 * d->radius + 1) * calc_pad_size(vi->height, d->block_size, d->block_step) *
+                 calc_pad_size(vi->width, d->block_size, d->block_step) * vi->format.bytesPerSample);
 
-            checkError(cuMemHostAlloc((void **) &thread_data.h_padded, padded_size, 0));
+            checkError(cuMemHostAlloc((void**)&thread_data.h_padded, padded_size, 0));
 
             {
-                std::lock_guard _ { d->thread_data_lock };
+                std::lock_guard _{d->thread_data_lock};
                 d->thread_data.emplace(thread_id, thread_data);
             }
 
@@ -616,22 +587,20 @@ static const VSFrame *VS_CC DFTTestGetFrame(
     src_frames.reserve(2 * d->radius + 1);
     for (int i = n - d->radius; i <= n + d->radius; i++) {
         src_frames.emplace_back(
-            vsapi->getFrameFilter(std::clamp(i, 0, vi->numFrames - 1), d->node, frameCtx),
-            FrameFreer{vsapi}
+            vsapi->getFrameFilter(std::clamp(i, 0, vi->numFrames - 1), d->node, frameCtx), FrameFreer{vsapi}
         );
     }
 
     auto src_center_frame = src_frames[d->radius].get();
 
-    const VSFrame * fr[] {
+    const VSFrame* fr[]{
         d->process[0] ? nullptr : src_center_frame,
         d->process[1] ? nullptr : src_center_frame,
         d->process[2] ? nullptr : src_center_frame
     };
-    const int pl[] { 0, 1, 2 };
-    std::unique_ptr<VSFrame, FrameFreer> dst_frame {
-        vsapi->newVideoFrame2(&vi->format, vi->width, vi->height, fr, pl, src_center_frame, core),
-        FrameFreer{vsapi}
+    const int pl[]{0, 1, 2};
+    std::unique_ptr<VSFrame, FrameFreer> dst_frame{
+        vsapi->newVideoFrame2(&vi->format, vi->width, vi->height, fr, pl, src_center_frame, core), FrameFreer{vsapi}
     };
 
     for (int plane = 0; plane < vi->format.numPlanes; plane++) {
@@ -644,90 +613,97 @@ static const VSFrame *VS_CC DFTTestGetFrame(
         int stride = vsapi->getStride(src_center_frame, plane) / vi->format.bytesPerSample;
 
         bool subsampled = vi->format.subSamplingW != 0 || vi->format.subSamplingH != 0;
-        auto & rfft_handle = (plane == 0 || !subsampled) ? d->rfft_handle : d->subsampled_rfft_handle;
-        auto & irfft_handle = (plane == 0 || !subsampled) ? d->irfft_handle : d->subsampled_irfft_handle;
+        auto& rfft_handle = (plane == 0 || !subsampled) ? d->rfft_handle : d->subsampled_rfft_handle;
+        auto& irfft_handle = (plane == 0 || !subsampled) ? d->irfft_handle : d->subsampled_irfft_handle;
 
-        int padded_size_spatial = (
-            calc_pad_size(height, d->block_size, d->block_step) *
-            calc_pad_size(width, d->block_size, d->block_step)
-        );
+        int padded_size_spatial =
+            (calc_pad_size(height, d->block_size, d->block_step) * calc_pad_size(width, d->block_size, d->block_step));
 
         for (int i = 0; i < 2 * d->radius + 1; i++) {
             auto srcp = vsapi->getReadPtr(src_frames[i].get(), plane);
             reflection_padding(
                 &thread_data.h_padded[(i * padded_size_spatial) * vi->format.bytesPerSample],
                 srcp,
-                width, height, stride,
-                d->block_size, d->block_step,
+                width,
+                height,
+                stride,
+                d->block_size,
+                d->block_step,
                 vi->format.bytesPerSample
             );
         }
 
         {
-            std::lock_guard lock { d->lock };
+            std::lock_guard lock{d->lock};
 
             CUdeviceptr d_buffer = d->in_place ? d->d_frequency.data : d->d_spatial.data;
 
             int padded_bytes = (2 * d->radius + 1) * padded_size_spatial * vi->format.bytesPerSample;
             checkError(cuMemcpyHtoDAsync(d->d_work_area_or_padded.data, thread_data.h_padded, padded_bytes, d->stream));
             {
-                void * params[] { &d_buffer, &d->d_work_area_or_padded.data, &width, &height };
+                void* params[]{&d_buffer, &d->d_work_area_or_padded.data, &width, &height};
                 checkError(cuLaunchKernel(
                     d->im2col_kernel,
-                    d->im2col_num_blocks, 1, 1,
-                    d->warps_per_block * d->warp_size, 1, 1,
+                    d->im2col_num_blocks,
+                    1,
+                    1,
+                    d->warps_per_block * d->warp_size,
+                    1,
+                    1,
                     0,
                     d->stream,
-                    params, nullptr
+                    params,
+                    nullptr
                 ));
             }
-            checkError(cufftExecR2C(
-                rfft_handle,
-                (cufftReal *) d_buffer,
-                (cufftComplex *) d->d_frequency.data
-            ));
+            checkError(cufftExecR2C(rfft_handle, (cufftReal*)d_buffer, (cufftComplex*)d->d_frequency.data));
             {
-                int num_blocks = (
-                    calc_pad_num(height, d->block_size, d->block_step) *
-                    calc_pad_num(width, d->block_size, d->block_step)
-                );
-                void * params[] { &d->d_frequency.data, &num_blocks };
+                int num_blocks =
+                    (calc_pad_num(height, d->block_size, d->block_step) *
+                     calc_pad_num(width, d->block_size, d->block_step));
+                void* params[]{&d->d_frequency.data, &num_blocks};
                 checkError(cuLaunchKernel(
                     d->filter_kernel,
-                    d->filter_num_blocks, 1, 1,
-                    d->warps_per_block * d->warp_size, 1, 1,
+                    d->filter_num_blocks,
+                    1,
+                    1,
+                    d->warps_per_block * d->warp_size,
+                    1,
+                    1,
                     0,
                     d->stream,
-                    params, nullptr
+                    params,
+                    nullptr
                 ));
             }
-            checkError(cufftExecC2R(
-                irfft_handle,
-                (cufftComplex *) d->d_frequency.data,
-                (cufftReal *) d_buffer
-            ));
+            checkError(cufftExecC2R(irfft_handle, (cufftComplex*)d->d_frequency.data, (cufftReal*)d_buffer));
             {
-                void * params[] { &d->d_work_area_or_padded.data, &d_buffer, &width, &height };
+                void* params[]{&d->d_work_area_or_padded.data, &d_buffer, &width, &height};
                 unsigned int vertical_size = calc_pad_size(height, d->block_size, d->block_step);
                 unsigned int horizontal_size = calc_pad_size(width, d->block_size, d->block_step);
                 unsigned int grid_x = (horizontal_size + d->warp_size - 1) / d->warp_size;
                 unsigned int grid_y = (vertical_size + d->warps_per_block - 1) / d->warps_per_block;
                 checkError(cuLaunchKernel(
                     d->col2im_kernel,
-                    grid_x, grid_y, 1,
-                    d->warp_size, d->warps_per_block, 1,
+                    grid_x,
+                    grid_y,
+                    1,
+                    d->warp_size,
+                    d->warps_per_block,
+                    1,
                     0,
                     d->stream,
-                    params, nullptr
+                    params,
+                    nullptr
                 ));
             }
             {
                 size_t pad_width = calc_pad_size(width, d->block_size, d->block_step);
                 size_t pad_height = calc_pad_size(height, d->block_size, d->block_step);
-                const CUDA_MEMCPY3D config {
+                const CUDA_MEMCPY3D config{
                     .srcXInBytes = (pad_width - width) / 2 * vi->format.bytesPerSample,
                     .srcY = (pad_height - height) / 2,
-                    .srcZ = (size_t) d->radius,
+                    .srcZ = (size_t)d->radius,
                     .srcMemoryType = CU_MEMORYTYPE_DEVICE,
                     .srcDevice = d->d_work_area_or_padded.data,
                     .srcPitch = pad_width * vi->format.bytesPerSample,
@@ -739,8 +715,8 @@ static const VSFrame *VS_CC DFTTestGetFrame(
                     .dstHost = thread_data.h_padded,
                     .dstPitch = pad_width * vi->format.bytesPerSample,
                     .dstHeight = pad_height,
-                    .WidthInBytes = (size_t) width * vi->format.bytesPerSample,
-                    .Height = (size_t) height,
+                    .WidthInBytes = (size_t)width * vi->format.bytesPerSample,
+                    .Height = (size_t)height,
                     .Depth = 1
                 };
                 checkError(cuMemcpy3DAsync(&config, d->stream));
@@ -758,26 +734,27 @@ static const VSFrame *VS_CC DFTTestGetFrame(
         auto dstp = vsapi->getWritePtr(dst_frame.get(), plane);
         auto input = &thread_data.h_padded[(offset_y * pad_width + offset_x) * vi->format.bytesPerSample];
         vsh::bitblt(
-            dstp, stride * vi->format.bytesPerSample,
-            input, pad_width * vi->format.bytesPerSample,
-            width * vi->format.bytesPerSample, height
+            dstp,
+            stride * vi->format.bytesPerSample,
+            input,
+            pad_width * vi->format.bytesPerSample,
+            width * vi->format.bytesPerSample,
+            height
         );
     }
 
     return dst_frame.release();
 }
 
-static void VS_CC DFTTestFree(
-    void *instanceData, VSCore *core, const VSAPI *vsapi
-) noexcept {
+static void VS_CC DFTTestFree(void* instanceData, VSCore* core, const VSAPI* vsapi) noexcept {
 
-    auto d = static_cast<DFTTestData *>(instanceData);
+    auto d = static_cast<DFTTestData*>(instanceData);
 
     vsapi->freeNode(d->node);
 
     showError(cuCtxPushCurrent(d->context));
 
-    for (const auto & [_, thread_data] : d->thread_data) {
+    for (const auto& [_, thread_data] : d->thread_data) {
         showError(cuMemFreeHost(thread_data.h_padded));
     }
 
@@ -790,27 +767,25 @@ static void VS_CC DFTTestFree(
     showError(cuDevicePrimaryCtxRelease(device));
 }
 
-static void VS_CC DFTTestCreate(
-    const VSMap *in, VSMap *out, void *userData,
-    VSCore *core, const VSAPI *vsapi
-) noexcept {
+static void VS_CC
+DFTTestCreate(const VSMap* in, VSMap* out, void* userData, VSCore* core, const VSAPI* vsapi) noexcept {
 
     bool context_retained = false;
     bool context_pushed = false;
 
-    context_releaser context_releaser { &context_retained };
+    context_releaser context_releaser{&context_retained};
 
     // pop context before release
-    context_popper context_popper { &context_pushed };
+    context_popper context_popper{&context_pushed};
 
     auto d = std::make_unique<DFTTestData>();
 
     d->node = vsapi->mapGetNode(in, "clip", 0, nullptr);
-    node_freer node_freer { vsapi, d->node };
+    node_freer node_freer{vsapi, d->node};
 
-    auto set_error = [vsapi, out](const char * error_message) -> void {
+    auto set_error = [vsapi, out](const char* error_message) -> void {
         vsapi->mapSetError(out, error_message);
-        return ;
+        return;
     };
 
     auto vi = vsapi->getVideoInfo(d->node);
@@ -878,15 +853,20 @@ static void VS_CC DFTTestCreate(
     auto compilation = compile(
         user_kernel,
         d->device,
-        d->radius, d->block_size, d->block_step, d->in_place,
-        d->warp_size, d->warps_per_block,
-        vi->format.sampleType, vi->format.bitsPerSample
+        d->radius,
+        d->block_size,
+        d->block_step,
+        d->in_place,
+        d->warp_size,
+        d->warps_per_block,
+        vi->format.sampleType,
+        vi->format.bitsPerSample
     );
     if (std::holds_alternative<std::string>(compilation)) {
         std::ostringstream message;
         message << '[' << __LINE__ << "] compile(): " << std::get<std::string>(compilation);
         vsapi->mapSetError(out, message.str().c_str());
-        return ;
+        return;
     }
     d->module = std::get<CUmodule>(compilation);
 
@@ -897,10 +877,7 @@ static void VS_CC DFTTestCreate(
     {
         int max_blocks_per_sm;
         checkError(cuOccupancyMaxActiveBlocksPerMultiprocessor(
-            &max_blocks_per_sm,
-            d->filter_kernel,
-            d->warps_per_block * d->warp_size,
-            0
+            &max_blocks_per_sm, d->filter_kernel, d->warps_per_block * d->warp_size, 0
         ));
         d->filter_num_blocks = num_sms * max_blocks_per_sm;
     }
@@ -909,10 +886,7 @@ static void VS_CC DFTTestCreate(
     {
         int max_blocks_per_sm;
         checkError(cuOccupancyMaxActiveBlocksPerMultiprocessor(
-            &max_blocks_per_sm,
-            d->im2col_kernel,
-            d->warps_per_block * d->warp_size,
-            0
+            &max_blocks_per_sm, d->im2col_kernel, d->warps_per_block * d->warp_size, 0
         ));
         d->im2col_num_blocks = num_sms * max_blocks_per_sm;
     }
@@ -921,61 +895,43 @@ static void VS_CC DFTTestCreate(
 
     checkError(cuStreamCreate(&d->stream.data, CU_STREAM_NON_BLOCKING));
 
-    checkError(cuEventCreate(
-        &d->event.data,
-        CU_EVENT_BLOCKING_SYNC | CU_EVENT_DISABLE_TIMING
-    ));
+    checkError(cuEventCreate(&d->event.data, CU_EVENT_BLOCKING_SYNC | CU_EVENT_DISABLE_TIMING));
 
-    size_t padded_bytes = (
-        (2 * d->radius + 1) *
-        calc_pad_size(vi->height, d->block_size, d->block_step) *
-        calc_pad_size(vi->width, d->block_size, d->block_step) *
-        vi->format.bytesPerSample
-    );
+    size_t padded_bytes =
+        ((2 * d->radius + 1) * calc_pad_size(vi->height, d->block_size, d->block_step) *
+         calc_pad_size(vi->width, d->block_size, d->block_step) * vi->format.bytesPerSample);
     // merge allocation to fft's work_area
     // checkError(cuMemAlloc(&d->d_padded.data, padded_bytes));
 
     if (!d->in_place) {
-        size_t spatial_bytes = (
-            calc_pad_num(vi->height, d->block_size, d->block_step) *
-            calc_pad_num(vi->width, d->block_size, d->block_step) *
-            (2 * d->radius + 1) *
-            square(d->block_size) *
-            sizeof(cufftReal)
-        );
+        size_t spatial_bytes =
+            (calc_pad_num(vi->height, d->block_size, d->block_step) *
+             calc_pad_num(vi->width, d->block_size, d->block_step) * (2 * d->radius + 1) * square(d->block_size) *
+             sizeof(cufftReal));
         checkError(cuMemAlloc(&d->d_spatial.data, spatial_bytes));
     }
 
-    size_t frequency_bytes = (
-        (2 * d->radius + 1) *
-        calc_pad_num(vi->height, d->block_size, d->block_step) *
-        calc_pad_num(vi->width, d->block_size, d->block_step) *
-        d->block_size *
-        (d->block_size / 2 + 1) *
-        sizeof(cufftComplex)
-    );
+    size_t frequency_bytes =
+        ((2 * d->radius + 1) * calc_pad_num(vi->height, d->block_size, d->block_step) *
+         calc_pad_num(vi->width, d->block_size, d->block_step) * d->block_size * (d->block_size / 2 + 1) *
+         sizeof(cufftComplex));
     checkError(cuMemAlloc(&d->d_frequency.data, frequency_bytes));
 
     // init cufft
     {
-        size_t max_work_size { padded_bytes };
+        size_t max_work_size{padded_bytes};
 
-        int batch = (
-            calc_pad_num(vi->height, d->block_size, d->block_step) *
-            calc_pad_num(vi->width, d->block_size, d->block_step)
-        );
-        std::array<int, 3> fft_size { 2 * d->radius + 1, d->block_size, d->block_size };
+        int batch =
+            (calc_pad_num(vi->height, d->block_size, d->block_step) *
+             calc_pad_num(vi->width, d->block_size, d->block_step));
+        std::array<int, 3> fft_size{2 * d->radius + 1, d->block_size, d->block_size};
         int is_spatial = d->radius == 0;
         int fft_rank = 3 - is_spatial;
         auto fft_n = &fft_size[is_spatial];
 
-        checkError(cufftPlanMany(
-            &d->rfft_handle.data,
-            fft_rank, fft_n,
-            nullptr, 1, 0,
-            nullptr, 1, 0,
-            CUFFT_R2C, batch
-        ));
+        checkError(
+            cufftPlanMany(&d->rfft_handle.data, fft_rank, fft_n, nullptr, 1, 0, nullptr, 1, 0, CUFFT_R2C, batch)
+        );
         {
             size_t work_size;
             checkError(cufftGetSize(d->rfft_handle, &work_size));
@@ -984,13 +940,9 @@ static void VS_CC DFTTestCreate(
         checkError(cufftSetWorkArea(d->rfft_handle, nullptr)); // free work area
         checkError(cufftSetStream(d->rfft_handle, d->stream));
 
-        checkError(cufftPlanMany(
-            &d->irfft_handle.data,
-            fft_rank, fft_n,
-            nullptr, 1, 0,
-            nullptr, 1, 0,
-            CUFFT_C2R, batch
-        ));
+        checkError(
+            cufftPlanMany(&d->irfft_handle.data, fft_rank, fft_n, nullptr, 1, 0, nullptr, 1, 0, CUFFT_C2R, batch)
+        );
         {
             size_t work_size;
             checkError(cufftGetSize(d->irfft_handle, &work_size));
@@ -1000,17 +952,22 @@ static void VS_CC DFTTestCreate(
         checkError(cufftSetStream(d->irfft_handle, d->stream));
 
         if (vi->format.subSamplingW != 0 || vi->format.subSamplingH != 0) {
-            int subsampled_batch = (
-                calc_pad_num(vi->height >> vi->format.subSamplingH, d->block_size, d->block_step) *
-                calc_pad_num(vi->width >> vi->format.subSamplingW, d->block_size, d->block_step)
-            );
+            int subsampled_batch =
+                (calc_pad_num(vi->height >> vi->format.subSamplingH, d->block_size, d->block_step) *
+                 calc_pad_num(vi->width >> vi->format.subSamplingW, d->block_size, d->block_step));
 
             checkError(cufftPlanMany(
                 &d->subsampled_rfft_handle.data,
-                fft_rank, fft_n,
-                nullptr, 1, 0,
-                nullptr, 1, 0,
-                CUFFT_R2C, subsampled_batch
+                fft_rank,
+                fft_n,
+                nullptr,
+                1,
+                0,
+                nullptr,
+                1,
+                0,
+                CUFFT_R2C,
+                subsampled_batch
             ));
             {
                 size_t work_size;
@@ -1022,10 +979,16 @@ static void VS_CC DFTTestCreate(
 
             checkError(cufftPlanMany(
                 &d->subsampled_irfft_handle.data,
-                fft_rank, fft_n,
-                nullptr, 1, 0,
-                nullptr, 1, 0,
-                CUFFT_C2R, subsampled_batch
+                fft_rank,
+                fft_n,
+                nullptr,
+                1,
+                0,
+                nullptr,
+                1,
+                0,
+                CUFFT_C2R,
+                subsampled_batch
             ));
             {
                 size_t work_size;
@@ -1037,11 +1000,11 @@ static void VS_CC DFTTestCreate(
         }
 
         checkError(cuMemAlloc(&d->d_work_area_or_padded.data, max_work_size));
-        checkError(cufftSetWorkArea(d->rfft_handle, (void *) d->d_work_area_or_padded.data));
-        checkError(cufftSetWorkArea(d->irfft_handle, (void *) d->d_work_area_or_padded.data));
+        checkError(cufftSetWorkArea(d->rfft_handle, (void*)d->d_work_area_or_padded.data));
+        checkError(cufftSetWorkArea(d->irfft_handle, (void*)d->d_work_area_or_padded.data));
         if (vi->format.subSamplingW != 0 || vi->format.subSamplingH != 0) {
-            checkError(cufftSetWorkArea(d->subsampled_rfft_handle, (void *) d->d_work_area_or_padded.data));
-            checkError(cufftSetWorkArea(d->subsampled_irfft_handle, (void *) d->d_work_area_or_padded.data));
+            checkError(cufftSetWorkArea(d->subsampled_rfft_handle, (void*)d->d_work_area_or_padded.data));
+            checkError(cufftSetWorkArea(d->subsampled_irfft_handle, (void*)d->d_work_area_or_padded.data));
         }
     }
 
@@ -1050,34 +1013,27 @@ static void VS_CC DFTTestCreate(
     d->num_uninitialized_threads.store(info.numThreads, std::memory_order_relaxed);
     d->thread_data.reserve(info.numThreads);
 
-    VSFilterDependency deps[] = { { d->node, rpGeneral } };
+    VSFilterDependency deps[] = {{d->node, rpGeneral}};
     VSVideoInfo out_vi = *vi;
 
     vsapi->createVideoFilter(
-        out, "DFTTest",
-        &out_vi, DFTTestGetFrame, DFTTestFree,
-        fmParallel, deps, 1, d.release(), core
+        out, "DFTTest", &out_vi, DFTTestGetFrame, DFTTestFree, fmParallel, deps, 1, d.release(), core
     );
 
     node_freer.release();
     context_releaser.release();
 }
 
-static void VS_CC RDFT(
-    const VSMap *in, VSMap *out, void *userData,
-    VSCore *core, const VSAPI *vsapi
-) noexcept {
+static void VS_CC RDFT(const VSMap* in, VSMap* out, void* userData, VSCore* core, const VSAPI* vsapi) noexcept {
 
-    auto set_error = [vsapi, out](const char * error_message) -> void {
-        vsapi->mapSetError(out, error_message);
-    };
+    auto set_error = [vsapi, out](const char* error_message) -> void { vsapi->mapSetError(out, error_message); };
 
     int ndim = vsapi->mapNumElements(in, "shape");
     if (ndim != 1 && ndim != 2 && ndim != 3) {
         return set_error("\"shape\" must be an array of ints with 1, 2 or 3 values");
     }
 
-    std::array<int, 3> shape {};
+    std::array<int, 3> shape{};
     {
         auto shape_array = vsapi->mapGetIntArray(in, "shape", nullptr);
         for (int i = 0; i < ndim; i++) {
@@ -1100,38 +1056,36 @@ static void VS_CC RDFT(
 
     auto input = vsapi->mapGetFloatArray(in, "data", nullptr);
 
-    auto output = std::make_unique<std::complex<double> []>(complex_size);
+    auto output = std::make_unique<std::complex<double>[]>(complex_size);
 
     if (ndim == 1) {
         dft(output.get(), input, size, 1);
-        vsapi->mapSetFloatArray(out, "ret", (const double *) output.get(), complex_size * 2);
+        vsapi->mapSetFloatArray(out, "ret", (const double*)output.get(), complex_size * 2);
     } else if (ndim == 2) {
         for (int i = 0; i < shape[0]; i++) {
             dft(&output[i * (shape[1] / 2 + 1)], &input[i * shape[1]], shape[1], 1);
         }
 
-        auto output2 = std::make_unique<std::complex<double> []>(complex_size);
+        auto output2 = std::make_unique<std::complex<double>[]>(complex_size);
 
         for (int i = 0; i < shape[1] / 2 + 1; i++) {
             dft(&output2[i], &output[i], shape[0], shape[1] / 2 + 1);
         }
 
-        vsapi->mapSetFloatArray(out, "ret", (const double *) output2.get(), complex_size * 2);
+        vsapi->mapSetFloatArray(out, "ret", (const double*)output2.get(), complex_size * 2);
     } else {
         for (int i = 0; i < shape[0] * shape[1]; i++) {
             dft(&output[i * (shape[2] / 2 + 1)], &input[i * shape[2]], shape[2], 1);
         }
 
-        auto output2 = std::make_unique<std::complex<double> []>(complex_size);
+        auto output2 = std::make_unique<std::complex<double>[]>(complex_size);
 
         for (int i = 0; i < shape[0]; i++) {
             for (int j = 0; j < shape[2] / 2 + 1; j++) {
-                dft(
-                    &output2[i * shape[1] * (shape[2] / 2 + 1) + j],
+                dft(&output2[i * shape[1] * (shape[2] / 2 + 1) + j],
                     &output[i * shape[1] * (shape[2] / 2 + 1) + j],
                     shape[1],
-                    (shape[2] / 2 + 1)
-                );
+                    (shape[2] / 2 + 1));
             }
         }
 
@@ -1139,19 +1093,16 @@ static void VS_CC RDFT(
             dft(&output[i], &output2[i], shape[0], shape[1] * (shape[2] / 2 + 1));
         }
 
-        vsapi->mapSetFloatArray(out, "ret", (const double *) output.get(), complex_size * 2);
+        vsapi->mapSetFloatArray(out, "ret", (const double*)output.get(), complex_size * 2);
     }
 }
 
-static void VS_CC ToSingle(
-    const VSMap *in, VSMap *out, void *userData,
-    VSCore *core, const VSAPI *vsapi
-) noexcept {
+static void VS_CC ToSingle(const VSMap* in, VSMap* out, void* userData, VSCore* core, const VSAPI* vsapi) noexcept {
 
     auto data = vsapi->mapGetFloatArray(in, "data", nullptr);
     int num = vsapi->mapNumElements(in, "data");
 
-    auto converted_data = std::make_unique<double []>(num);
+    auto converted_data = std::make_unique<double[]>(num);
     for (int i = 0; i < num; i++) {
         converted_data[i] = static_cast<float>(data[i]);
     }
@@ -1163,7 +1114,7 @@ static void VS_CC ToSingle(
     }
 }
 
-static void Version(const VSMap *, VSMap * out, void *, VSCore *, const VSAPI *vsapi) {
+static void Version(const VSMap*, VSMap* out, void*, VSCore*, const VSAPI* vsapi) {
     vsapi->mapSetData(out, "version", PLUGIN_VERSION_STRING, -1, dtUtf8, maReplace);
 
     vsapi->mapSetInt(out, "cufft_version_build", CUFFT_VERSION, maReplace);
@@ -1175,13 +1126,15 @@ static void Version(const VSMap *, VSMap * out, void *, VSCore *, const VSAPI *v
 }
 
 VS_EXTERNAL_API(void)
-VapourSynthPluginInit2(VSPlugin *plugin, const VSPLUGINAPI *vspapi) {
+VapourSynthPluginInit2(VSPlugin* plugin, const VSPLUGINAPI* vspapi) {
     vspapi->configPlugin(
         "io.github.amusementclub.dfttest2_cuda",
         "dfttest2_cuda",
         "DFTTest2 (CUDA)",
         VS_MAKE_VERSION(PLUGIN_VERSION_MAJOR, PLUGIN_VERSION_MINOR),
-        VAPOURSYNTH_API_VERSION, 0, plugin
+        VAPOURSYNTH_API_VERSION,
+        0,
+        plugin
     );
 
     vspapi->registerFunction(
@@ -1195,7 +1148,9 @@ VapourSynthPluginInit2(VSPlugin *plugin, const VSPLUGINAPI *vspapi) {
         "in_place:int:opt;"
         "device_id:int:opt;",
         "clip:vnode;",
-        DFTTestCreate, nullptr, plugin
+        DFTTestCreate,
+        nullptr,
+        plugin
     );
 
     vspapi->registerFunction(
@@ -1203,20 +1158,12 @@ VapourSynthPluginInit2(VSPlugin *plugin, const VSPLUGINAPI *vspapi) {
         "data:float[];"
         "shape:int[];",
         "any",
-        RDFT, nullptr, plugin
+        RDFT,
+        nullptr,
+        plugin
     );
 
-    vspapi->registerFunction(
-        "ToSingle",
-        "data:float[];",
-        "any",
-        ToSingle, nullptr, plugin
-    );
+    vspapi->registerFunction("ToSingle", "data:float[];", "any", ToSingle, nullptr, plugin);
 
-    vspapi->registerFunction(
-        "Version",
-        "",
-        "any",
-        Version, nullptr, plugin
-    );
+    vspapi->registerFunction("Version", "", "any", Version, nullptr, plugin);
 }

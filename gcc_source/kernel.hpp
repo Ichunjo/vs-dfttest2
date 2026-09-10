@@ -5,13 +5,10 @@
 
 #pragma GCC diagnostic ignored "-Wpsabi"
 
-
 typedef float Vec16f __attribute__((__vector_size__(64), __aligned__(64)));
 typedef int Vec16i __attribute__((__vector_size__(64), __aligned__(64)));
 
-
-template <typename T>
-static T square(T x) {
+template <typename T> static T square(T x) {
     return x * x;
 }
 
@@ -21,11 +18,11 @@ static T square(T x) {
 #define FNMS(a, b, c) (c - a * b)
 
 #ifdef _MSC_VER
-#pragma warning(disable: 4068)
+#pragma warning(disable : 4068)
 #endif
 
 static inline constexpr Vec16f __attribute__((__always_inline__)) constant(float val) {
-    Vec16f ret = { val, val, val, val, val, val, val, val, val, val, val, val, val, val, val, val };
+    Vec16f ret = {val, val, val, val, val, val, val, val, val, val, val, val, val, val, val, val};
     return ret;
 }
 
@@ -52,7 +49,7 @@ static inline Vec16f pow(Vec16f base, Vec16f exp) {
 static inline Vec16f max(Vec16f x, Vec16f y) {
 #if __clang__ && __clang_major__ >= 14
     return __builtin_elementwise_max(x, y);
-#else // __clang__ && __clang_major__ >= 14
+#else  // __clang__ && __clang_major__ >= 14
     Vec16f ret;
 
     for (int i = 0; i < 16; i++) {
@@ -63,12 +60,10 @@ static inline Vec16f max(Vec16f x, Vec16f y) {
 #endif // __clang__ && __clang_major__ >= 14
 }
 
-template <int n>
-static void rdft(Vec16f data[(n / 2 + 1) * 2]);
+template <int n> static void rdft(Vec16f data[(n / 2 + 1) * 2]);
 
 // ./gen_r2cf.native -standalone -with-rs 2 -with-csr 2 -with-csi 2 -fma -n 16
-template <>
-void rdft<16>(Vec16f data[18]) {
+template <> void rdft<16>(Vec16f data[18]) {
     using E = Vec16f;
 
     auto R0 = &data[0];
@@ -234,17 +229,13 @@ void rdft<16>(Vec16f data[18]) {
     Ci[16] = constant(0.0f);
 }
 
-template <int n>
-static void dft(Vec16f data[/* (n - 1) * stride * 2 + 2 */], int stride = 1);
+template <int n> static void dft(Vec16f data[/* (n - 1) * stride * 2 + 2 */], int stride = 1);
 
 // ./gen_notw.native -standalone -with-istride 2 -with-ostride 2 -fma -n 1 -sign -1
-template <>
-void dft<1>(Vec16f data[/* 2 */], int stride) {
-}
+template <> void dft<1>(Vec16f data[/* 2 */], int stride) {}
 
 // ./gen_notw.native -standalone -with-istride 2 -with-ostride 2 -fma -n 3 -sign -1
-template <>
-void dft<3>(Vec16f data[/* 4 * stride + 2 */], int stride) {
+template <> void dft<3>(Vec16f data[/* 4 * stride + 2 */], int stride) {
     using E = Vec16f;
 
     auto ri = &data[0];
@@ -290,8 +281,7 @@ void dft<3>(Vec16f data[/* 4 * stride + 2 */], int stride) {
 }
 
 // ./gen_notw.native -standalone -with-istride 2 -with-ostride 2 -fma -n 5 -sign -1
-template <>
-void dft<5>(Vec16f data[/* 8 * stride + 2 */], int stride) {
+template <> void dft<5>(Vec16f data[/* 8 * stride + 2 */], int stride) {
     using E = Vec16f;
 
     auto ri = &data[0];
@@ -388,8 +378,7 @@ void dft<5>(Vec16f data[/* 8 * stride + 2 */], int stride) {
     }
 }
 
-template <>
-void dft<7>(Vec16f data[/* 12 * stride + 2 */], int stride) {
+template <> void dft<7>(Vec16f data[/* 12 * stride + 2 */], int stride) {
     using E = Vec16f;
 
     auto ri = &data[0];
@@ -545,8 +534,7 @@ void dft<7>(Vec16f data[/* 12 * stride + 2 */], int stride) {
 }
 
 // ./gen_notw.native -standalone -with-istride 2 -with-ostride 2 -fma -n 16 -sign -1
-template <>
-void dft<16>(Vec16f data[/* 30 * stride + 2 */], int stride) {
+template <> void dft<16>(Vec16f data[/* 30 * stride + 2 */], int stride) {
     using E = Vec16f;
 
     auto ri = &data[0];
@@ -920,17 +908,13 @@ void dft<16>(Vec16f data[/* 30 * stride + 2 */], int stride) {
     }
 }
 
-template <int n>
-static void idft(Vec16f data[/* (n - 1) * stride * 2 + 2 */], int stride = 1);
+template <int n> static void idft(Vec16f data[/* (n - 1) * stride * 2 + 2 */], int stride = 1);
 
 // ./gen_notw.native -standalone -with-istride 2 -with-ostride 2 -fma -n 1 -sign 1
-template <>
-void idft<1>(Vec16f data[/* 2 */], int stride) {
-}
+template <> void idft<1>(Vec16f data[/* 2 */], int stride) {}
 
 // ./gen_notw.native -standalone -with-istride 2 -with-ostride 2 -fma -n 3 -sign 1
-template <>
-void idft<3>(Vec16f data[/* 4 * stride + 2 */], int stride) {
+template <> void idft<3>(Vec16f data[/* 4 * stride + 2 */], int stride) {
     using E = Vec16f;
 
     auto ri = &data[0];
@@ -976,8 +960,7 @@ void idft<3>(Vec16f data[/* 4 * stride + 2 */], int stride) {
 }
 
 // ./gen_notw.native -standalone -with-istride 2 -with-ostride 2 -fma -n 5 -sign 1
-template <>
-void idft<5>(Vec16f data[/* 8 * stride + 2 */], int stride) {
+template <> void idft<5>(Vec16f data[/* 8 * stride + 2 */], int stride) {
     using E = Vec16f;
 
     auto ri = &data[0];
@@ -1075,8 +1058,7 @@ void idft<5>(Vec16f data[/* 8 * stride + 2 */], int stride) {
 }
 
 // ./gen_notw.native -standalone -with-istride 2 -with-ostride 2 -fma -n 7 -sign 1
-template <>
-void idft<7>(Vec16f data[/* 8 * stride + 2 */], int stride) {
+template <> void idft<7>(Vec16f data[/* 8 * stride + 2 */], int stride) {
     using E = Vec16f;
 
     auto ri = &data[0];
@@ -1232,8 +1214,7 @@ void idft<7>(Vec16f data[/* 8 * stride + 2 */], int stride) {
 }
 
 // ./gen_notw.native -standalone -with-istride 2 -with-ostride 2 -fma -n 16 -sign 1
-template <>
-void idft<16>(Vec16f data[/* 30 * stride + 2 */], int stride) {
+template <> void idft<16>(Vec16f data[/* 30 * stride + 2 */], int stride) {
     using E = Vec16f;
 
     auto ri = &data[0];
@@ -1607,12 +1588,10 @@ void idft<16>(Vec16f data[/* 30 * stride + 2 */], int stride) {
     }
 }
 
-template <int n>
-static void irdft(Vec16f data[(n / 2 + 1) * 2]);
+template <int n> static void irdft(Vec16f data[(n / 2 + 1) * 2]);
 
 // ./gen_r2cb.native -standalone -with-rs 2 -with-csr 2 -with-csi 2 -fma -n 16
-template <>
-void irdft<16>(Vec16f data[18]) {
+template <> void irdft<16>(Vec16f data[18]) {
     using E = Vec16f;
 
     auto R0 = &data[0];
@@ -1777,12 +1756,10 @@ void irdft<16>(Vec16f data[18]) {
     }
 }
 
-template <int n>
-static void post_irdft(Vec16f data[n]);
+template <int n> static void post_irdft(Vec16f data[n]);
 
-template <>
-void post_irdft<16>(Vec16f data[16]) {
-    #pragma GCC unroll 7
+template <> void post_irdft<16>(Vec16f data[16]) {
+#pragma GCC unroll 7
     for (int i = 1; i < 8; i++) {
         auto temp = data[i];
         data[i] = data[16 - i];
@@ -1790,24 +1767,27 @@ void post_irdft<16>(Vec16f data[16]) {
     }
 }
 
-template <int stride = 1>
-static inline void transpose_16x16(Vec16f block[/* 16 */]) {
-    #pragma GCC unroll 2
+template <int stride = 1> static inline void transpose_16x16(Vec16f block[/* 16 */]) {
+#pragma GCC unroll 2
     for (int i = 0; i < 2; i++) {
-        #pragma GCC unroll 2
+#pragma GCC unroll 2
         for (int j = 0; j < 2; j++) {
-            #pragma GCC unroll 2
+#pragma GCC unroll 2
             for (int k = 0; k < 2; k++) {
                 auto id1 = ((i * 2 + j) * 2 + k) * 2 * stride;
                 auto id2 = (((i * 2 + j) * 2 + k) * 2 + 1) * stride;
 
 #if __clang__ || (defined __GNUC_MAJOR__ && __GNUC_MAJOR__ >= 12)
-                Vec16f temp1 = __builtin_shufflevector(block[id1], block[id2], 0, 2, 16, 18, 4, 6, 20, 22, 8, 10, 24, 26, 12, 14, 28, 30);
-                Vec16f temp2 = __builtin_shufflevector(block[id1], block[id2], 1, 3, 17, 19, 5, 7, 21, 23, 9, 11, 25, 27, 13, 15, 29, 31);
-#else // __clang__ || (defined __GNUC_MAJOR__ && __GNUC_MAJOR__ >= 12)
-                Vec16i mask1 = { 0, 2, 16, 18, 4, 6, 20, 22, 8, 10, 24, 26, 12, 14, 28, 30 };
+                Vec16f temp1 = __builtin_shufflevector(
+                    block[id1], block[id2], 0, 2, 16, 18, 4, 6, 20, 22, 8, 10, 24, 26, 12, 14, 28, 30
+                );
+                Vec16f temp2 = __builtin_shufflevector(
+                    block[id1], block[id2], 1, 3, 17, 19, 5, 7, 21, 23, 9, 11, 25, 27, 13, 15, 29, 31
+                );
+#else  // __clang__ || (defined __GNUC_MAJOR__ && __GNUC_MAJOR__ >= 12)
+                Vec16i mask1 = {0, 2, 16, 18, 4, 6, 20, 22, 8, 10, 24, 26, 12, 14, 28, 30};
                 Vec16f temp1 = __builtin_shuffle(block[id1], block[id2], mask1);
-                Vec16i mask2 = { 1, 3, 17, 19, 5, 7, 21, 23, 9, 11, 25, 27, 13, 15, 29, 31 };
+                Vec16i mask2 = {1, 3, 17, 19, 5, 7, 21, 23, 9, 11, 25, 27, 13, 15, 29, 31};
                 Vec16f temp2 = __builtin_shuffle(block[id1], block[id2], mask2);
 #endif // __clang__ || (defined __GNUC_MAJOR__ && __GNUC_MAJOR__ >= 12)
 
@@ -1815,18 +1795,22 @@ static inline void transpose_16x16(Vec16f block[/* 16 */]) {
                 block[id2] = temp2;
             }
 
-            #pragma GCC unroll 2
+#pragma GCC unroll 2
             for (int k = 0; k < 2; k++) {
                 auto id1 = (((i * 2 + j) * 2) * 2 + k) * stride;
                 auto id2 = (((i * 2 + j) * 2 + 1) * 2 + k) * stride;
 
 #if __clang__ || (defined __GNUC_MAJOR__ && __GNUC_MAJOR__ >= 12)
-                Vec16f temp1 = __builtin_shufflevector(block[id1], block[id2], 0, 2, 16, 18, 4, 6, 20, 22, 8, 10, 24, 26, 12, 14, 28, 30);
-                Vec16f temp2 = __builtin_shufflevector(block[id1], block[id2], 1, 3, 17, 19, 5, 7, 21, 23, 9, 11, 25, 27, 13, 15, 29, 31);
-#else // __clang__ || (defined __GNUC_MAJOR__ && __GNUC_MAJOR__ >= 12)
-                Vec16i mask1 = { 0, 2, 16, 18, 4, 6, 20, 22, 8, 10, 24, 26, 12, 14, 28, 30 };
+                Vec16f temp1 = __builtin_shufflevector(
+                    block[id1], block[id2], 0, 2, 16, 18, 4, 6, 20, 22, 8, 10, 24, 26, 12, 14, 28, 30
+                );
+                Vec16f temp2 = __builtin_shufflevector(
+                    block[id1], block[id2], 1, 3, 17, 19, 5, 7, 21, 23, 9, 11, 25, 27, 13, 15, 29, 31
+                );
+#else  // __clang__ || (defined __GNUC_MAJOR__ && __GNUC_MAJOR__ >= 12)
+                Vec16i mask1 = {0, 2, 16, 18, 4, 6, 20, 22, 8, 10, 24, 26, 12, 14, 28, 30};
                 Vec16f temp1 = __builtin_shuffle(block[id1], block[id2], mask1);
-                Vec16i mask2 = { 1, 3, 17, 19, 5, 7, 21, 23, 9, 11, 25, 27, 13, 15, 29, 31 };
+                Vec16i mask2 = {1, 3, 17, 19, 5, 7, 21, 23, 9, 11, 25, 27, 13, 15, 29, 31};
                 Vec16f temp2 = __builtin_shuffle(block[id1], block[id2], mask2);
 #endif // __clang__ || (defined __GNUC_MAJOR__ && __GNUC_MAJOR__ >= 12)
 
@@ -1835,19 +1819,23 @@ static inline void transpose_16x16(Vec16f block[/* 16 */]) {
             }
         }
 
-        #pragma GCC unroll 4
+#pragma GCC unroll 4
         for (int j = 0; j < 4; j++) {
             auto id1 = (i * 8 + j) * stride;
             auto id2 = (i * 8 + 4 + j) * stride;
 
 #if __clang__ || (defined __GNUC_MAJOR__ && __GNUC_MAJOR__ >= 12)
-                Vec16f temp1 = __builtin_shufflevector(block[id1], block[id2], 0, 1, 2, 3, 16, 17, 18, 19, 8, 9, 10, 11, 24, 25, 26, 27);
-                Vec16f temp2 = __builtin_shufflevector(block[id1], block[id2], 4, 5, 6, 7, 20, 21, 22, 23, 12, 13, 14, 15, 28, 29, 30, 31);
-#else // __clang__ || (defined __GNUC_MAJOR__ && __GNUC_MAJOR__ >= 12)
-                Vec16i mask1 = { 0, 1, 2, 3, 16, 17, 18, 19, 8, 9, 10, 11, 24, 25, 26, 27 };
-                Vec16f temp1 = __builtin_shuffle(block[id1], block[id2], mask1);
-                Vec16i mask2 = { 4, 5, 6, 7, 20, 21, 22, 23, 12, 13, 14, 15, 28, 29, 30, 31 };
-                Vec16f temp2 = __builtin_shuffle(block[id1], block[id2], mask2);
+            Vec16f temp1 = __builtin_shufflevector(
+                block[id1], block[id2], 0, 1, 2, 3, 16, 17, 18, 19, 8, 9, 10, 11, 24, 25, 26, 27
+            );
+            Vec16f temp2 = __builtin_shufflevector(
+                block[id1], block[id2], 4, 5, 6, 7, 20, 21, 22, 23, 12, 13, 14, 15, 28, 29, 30, 31
+            );
+#else  // __clang__ || (defined __GNUC_MAJOR__ && __GNUC_MAJOR__ >= 12)
+            Vec16i mask1 = {0, 1, 2, 3, 16, 17, 18, 19, 8, 9, 10, 11, 24, 25, 26, 27};
+            Vec16f temp1 = __builtin_shuffle(block[id1], block[id2], mask1);
+            Vec16i mask2 = {4, 5, 6, 7, 20, 21, 22, 23, 12, 13, 14, 15, 28, 29, 30, 31};
+            Vec16f temp2 = __builtin_shuffle(block[id1], block[id2], mask2);
 #endif // __clang__ || (defined __GNUC_MAJOR__ && __GNUC_MAJOR__ >= 12)
 
             block[id1] = temp1;
@@ -1855,16 +1843,20 @@ static inline void transpose_16x16(Vec16f block[/* 16 */]) {
         }
     }
 
-    #pragma GCC unroll 8
+#pragma GCC unroll 8
     for (int i = 0; i < 8; i++) {
 #if __clang__ || (defined __GNUC_MAJOR__ && __GNUC_MAJOR__ >= 12)
-                Vec16f temp1 = __builtin_shufflevector(block[i * stride], block[(i + 8) * stride], 0, 1, 2, 3, 4, 5, 6, 7, 16, 17, 18, 19, 20, 21, 22, 23);
-                Vec16f temp2 = __builtin_shufflevector(block[i * stride], block[(i + 8) * stride], 8, 9, 10, 11, 12, 13, 14, 15, 24, 25, 26, 27, 28, 29, 30, 31);
-#else // __clang__ || (defined __GNUC_MAJOR__ && __GNUC_MAJOR__ >= 12)
-                Vec16i mask1 = { 0, 1, 2, 3, 4, 5, 6, 7, 16, 17, 18, 19, 20, 21, 22, 23 };
-                Vec16f temp1 = __builtin_shuffle(block[i * stride], block[(i + 8) * stride], mask1);
-                Vec16i mask2 = { 8, 9, 10, 11, 12, 13, 14, 15, 24, 25, 26, 27, 28, 29, 30, 31 };
-                Vec16f temp2 = __builtin_shuffle(block[i * stride], block[(i + 8) * stride], mask2);
+        Vec16f temp1 = __builtin_shufflevector(
+            block[i * stride], block[(i + 8) * stride], 0, 1, 2, 3, 4, 5, 6, 7, 16, 17, 18, 19, 20, 21, 22, 23
+        );
+        Vec16f temp2 = __builtin_shufflevector(
+            block[i * stride], block[(i + 8) * stride], 8, 9, 10, 11, 12, 13, 14, 15, 24, 25, 26, 27, 28, 29, 30, 31
+        );
+#else  // __clang__ || (defined __GNUC_MAJOR__ && __GNUC_MAJOR__ >= 12)
+        Vec16i mask1 = {0, 1, 2, 3, 4, 5, 6, 7, 16, 17, 18, 19, 20, 21, 22, 23};
+        Vec16f temp1 = __builtin_shuffle(block[i * stride], block[(i + 8) * stride], mask1);
+        Vec16i mask2 = {8, 9, 10, 11, 12, 13, 14, 15, 24, 25, 26, 27, 28, 29, 30, 31};
+        Vec16f temp2 = __builtin_shuffle(block[i * stride], block[(i + 8) * stride], mask2);
 #endif // __clang__ || (defined __GNUC_MAJOR__ && __GNUC_MAJOR__ >= 12)
 
         block[i * stride] = temp1;
@@ -1872,18 +1864,12 @@ static inline void transpose_16x16(Vec16f block[/* 16 */]) {
     }
 }
 
-template <int stride = 1>
-static inline void transpose_32x16(Vec16f block[/* 16 * 2 */]) {
+template <int stride = 1> static inline void transpose_32x16(Vec16f block[/* 16 * 2 */]) {
     transpose_16x16<2 * stride>(block);
     transpose_16x16<2 * stride>(block + stride);
 }
 
-static inline void remove_mean(
-    Vec16f * __restrict block,
-    float gf,
-    const Vec16f * __restrict window_freq,
-    int radius
-) {
+static inline void remove_mean(Vec16f* __restrict block, float gf, const Vec16f* __restrict window_freq, int radius) {
 
     for (int i = 0; i < (2 * radius + 1) * 32; i++) {
         block[i] -= gf * window_freq[i];
@@ -1891,8 +1877,8 @@ static inline void remove_mean(
 }
 
 static inline void frequency_filtering(
-    Vec16f * __restrict block,
-    const Vec16f * __restrict sigma,
+    Vec16f* __restrict block,
+    const Vec16f* __restrict sigma,
     float sigma2,
     float pmin,
     float pmax,
@@ -1956,12 +1942,7 @@ static inline void frequency_filtering(
     }
 }
 
-static inline void add_mean(
-    Vec16f * __restrict block,
-    float gf,
-    const Vec16f * __restrict window_freq,
-    int radius
-) {
+static inline void add_mean(Vec16f* __restrict block, float gf, const Vec16f* __restrict window_freq, int radius) {
 
     for (int i = 0; i < (2 * radius + 1) * 32; i++) {
         block[i] += gf * window_freq[i];
@@ -1969,14 +1950,14 @@ static inline void add_mean(
 }
 
 static inline void fused(
-    Vec16f * __restrict block,
-    const Vec16f * __restrict sigma,
+    Vec16f* __restrict block,
+    const Vec16f* __restrict sigma,
     float sigma2,
     float pmin,
     float pmax,
     int filter_type,
     bool zero_mean,
-    const Vec16f * __restrict window_freq,
+    const Vec16f* __restrict window_freq,
     int radius
 ) {
 
@@ -1987,31 +1968,31 @@ static inline void fused(
         dft<16>(&block[i * 32]);
     }
     if (radius == 0) {
-        #pragma GCC unroll 16
+#pragma GCC unroll 16
         for (int i = 0; i < 16; i++) {
             dft<1>(&block[i * 2], 16);
         }
     }
     if (radius == 1) {
-        #pragma GCC unroll 16
+#pragma GCC unroll 16
         for (int i = 0; i < 16; i++) {
             dft<3>(&block[i * 2], 16);
         }
     }
     if (radius == 2) {
-        #pragma GCC unroll 16
+#pragma GCC unroll 16
         for (int i = 0; i < 16; i++) {
             dft<5>(&block[i * 2], 16);
         }
     }
     if (radius == 3) {
-        #pragma GCC unroll 16
+#pragma GCC unroll 16
         for (int i = 0; i < 16; i++) {
             dft<7>(&block[i * 2], 16);
         }
     }
 
-    float gf {};
+    float gf{};
     if (zero_mean) {
         gf = block[0][0] / window_freq[0][0];
         remove_mean(block, gf, window_freq, radius);
@@ -2024,25 +2005,25 @@ static inline void fused(
     }
 
     if (radius == 0) {
-        #pragma GCC unroll 16
+#pragma GCC unroll 16
         for (int i = 0; i < 16; i++) {
             idft<1>(&block[i * 2], 16);
         }
     }
     if (radius == 1) {
-        #pragma GCC unroll 16
+#pragma GCC unroll 16
         for (int i = 0; i < 16; i++) {
             idft<3>(&block[i * 2], 16);
         }
     }
     if (radius == 2) {
-        #pragma GCC unroll 16
+#pragma GCC unroll 16
         for (int i = 0; i < 16; i++) {
             idft<5>(&block[i * 2], 16);
         }
     }
     if (radius == 3) {
-        #pragma GCC unroll 16
+#pragma GCC unroll 16
         for (int i = 0; i < 16; i++) {
             idft<7>(&block[i * 2], 16);
         }

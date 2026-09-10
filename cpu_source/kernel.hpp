@@ -10,15 +10,13 @@
 #define FNMS(a, b, c) nmul_add(a, b, c)
 
 #ifdef _MSC_VER
-#pragma warning(disable: 4068)
+#pragma warning(disable : 4068)
 #endif
 
-template <int n>
-static void rdft(Vec16f data[(n / 2 + 1) * 2]);
+template <int n> static void rdft(Vec16f data[(n / 2 + 1) * 2]);
 
 // ./gen_r2cf.native -standalone -with-rs 2 -with-csr 2 -with-csi 2 -fma -n 16
-template <>
-void rdft<16>(Vec16f data[18]) {
+template <> void rdft<16>(Vec16f data[18]) {
     using E = Vec16f;
 
     auto R0 = &data[0];
@@ -184,17 +182,13 @@ void rdft<16>(Vec16f data[18]) {
     Ci[16] = 0.0f;
 }
 
-template <int n>
-static void dft(Vec16f data[/* (n - 1) * stride * 2 + 2 */], int stride = 1);
+template <int n> static void dft(Vec16f data[/* (n - 1) * stride * 2 + 2 */], int stride = 1);
 
 // ./gen_notw.native -standalone -with-istride 2 -with-ostride 2 -fma -n 1 -sign -1
-template <>
-void dft<1>(Vec16f data[/* 2 */], int stride) {
-}
+template <> void dft<1>(Vec16f data[/* 2 */], int stride) {}
 
 // ./gen_notw.native -standalone -with-istride 2 -with-ostride 2 -fma -n 3 -sign -1
-template <>
-void dft<3>(Vec16f data[/* 4 * stride + 2 */], int stride) {
+template <> void dft<3>(Vec16f data[/* 4 * stride + 2 */], int stride) {
     using E = Vec16f;
 
     auto ri = &data[0];
@@ -240,8 +234,7 @@ void dft<3>(Vec16f data[/* 4 * stride + 2 */], int stride) {
 }
 
 // ./gen_notw.native -standalone -with-istride 2 -with-ostride 2 -fma -n 5 -sign -1
-template <>
-void dft<5>(Vec16f data[/* 8 * stride + 2 */], int stride) {
+template <> void dft<5>(Vec16f data[/* 8 * stride + 2 */], int stride) {
     using E = Vec16f;
 
     auto ri = &data[0];
@@ -338,8 +331,7 @@ void dft<5>(Vec16f data[/* 8 * stride + 2 */], int stride) {
     }
 }
 
-template <>
-void dft<7>(Vec16f data[/* 12 * stride + 2 */], int stride) {
+template <> void dft<7>(Vec16f data[/* 12 * stride + 2 */], int stride) {
     using E = Vec16f;
 
     auto ri = &data[0];
@@ -495,8 +487,7 @@ void dft<7>(Vec16f data[/* 12 * stride + 2 */], int stride) {
 }
 
 // ./gen_notw.native -standalone -with-istride 2 -with-ostride 2 -fma -n 16 -sign -1
-template <>
-void dft<16>(Vec16f data[/* 30 * stride + 2 */], int stride) {
+template <> void dft<16>(Vec16f data[/* 30 * stride + 2 */], int stride) {
     using E = Vec16f;
 
     auto ri = &data[0];
@@ -870,17 +861,13 @@ void dft<16>(Vec16f data[/* 30 * stride + 2 */], int stride) {
     }
 }
 
-template <int n>
-static void idft(Vec16f data[/* (n - 1) * stride * 2 + 2 */], int stride = 1);
+template <int n> static void idft(Vec16f data[/* (n - 1) * stride * 2 + 2 */], int stride = 1);
 
 // ./gen_notw.native -standalone -with-istride 2 -with-ostride 2 -fma -n 1 -sign 1
-template <>
-void idft<1>(Vec16f data[/* 2 */], int stride) {
-}
+template <> void idft<1>(Vec16f data[/* 2 */], int stride) {}
 
 // ./gen_notw.native -standalone -with-istride 2 -with-ostride 2 -fma -n 3 -sign 1
-template <>
-void idft<3>(Vec16f data[/* 4 * stride + 2 */], int stride) {
+template <> void idft<3>(Vec16f data[/* 4 * stride + 2 */], int stride) {
     using E = Vec16f;
 
     auto ri = &data[0];
@@ -926,8 +913,7 @@ void idft<3>(Vec16f data[/* 4 * stride + 2 */], int stride) {
 }
 
 // ./gen_notw.native -standalone -with-istride 2 -with-ostride 2 -fma -n 5 -sign 1
-template <>
-void idft<5>(Vec16f data[/* 8 * stride + 2 */], int stride) {
+template <> void idft<5>(Vec16f data[/* 8 * stride + 2 */], int stride) {
     using E = Vec16f;
 
     auto ri = &data[0];
@@ -1025,8 +1011,7 @@ void idft<5>(Vec16f data[/* 8 * stride + 2 */], int stride) {
 }
 
 // ./gen_notw.native -standalone -with-istride 2 -with-ostride 2 -fma -n 7 -sign 1
-template <>
-void idft<7>(Vec16f data[/* 8 * stride + 2 */], int stride) {
+template <> void idft<7>(Vec16f data[/* 8 * stride + 2 */], int stride) {
     using E = Vec16f;
 
     auto ri = &data[0];
@@ -1182,8 +1167,7 @@ void idft<7>(Vec16f data[/* 8 * stride + 2 */], int stride) {
 }
 
 // ./gen_notw.native -standalone -with-istride 2 -with-ostride 2 -fma -n 16 -sign 1
-template <>
-void idft<16>(Vec16f data[/* 30 * stride + 2 */], int stride) {
+template <> void idft<16>(Vec16f data[/* 30 * stride + 2 */], int stride) {
     using E = Vec16f;
 
     auto ri = &data[0];
@@ -1557,12 +1541,10 @@ void idft<16>(Vec16f data[/* 30 * stride + 2 */], int stride) {
     }
 }
 
-template <int n>
-static void irdft(Vec16f data[(n / 2 + 1) * 2]);
+template <int n> static void irdft(Vec16f data[(n / 2 + 1) * 2]);
 
 // ./gen_r2cb.native -standalone -with-rs 2 -with-csr 2 -with-csi 2 -fma -n 16
-template <>
-void irdft<16>(Vec16f data[18]) {
+template <> void irdft<16>(Vec16f data[18]) {
     using E = Vec16f;
 
     auto R0 = &data[0];
@@ -1727,12 +1709,10 @@ void irdft<16>(Vec16f data[18]) {
     }
 }
 
-template <int n>
-static void post_irdft(Vec16f data[n]);
+template <int n> static void post_irdft(Vec16f data[n]);
 
-template <>
-void post_irdft<16>(Vec16f data[16]) {
-    #pragma GCC unroll 7
+template <> void post_irdft<16>(Vec16f data[16]) {
+#pragma GCC unroll 7
     for (int i = 1; i < 8; i++) {
         auto temp = data[i];
         data[i] = data[16 - i];
@@ -1740,8 +1720,7 @@ void post_irdft<16>(Vec16f data[16]) {
     }
 }
 
-template <int stride = 1>
-static inline void transpose_8x8(Vec8f block[/* 8 */]) {
+template <int stride = 1> static inline void transpose_8x8(Vec8f block[/* 8 */]) {
     for (int i = 0; i < 4; ++i) {
         Vec8f temp1 = blend8<0, 2, 8, 10, 4, 6, 12, 14>(block[i * 2 * stride], block[(i * 2 + 1) * stride]);
         Vec8f temp2 = blend8<1, 3, 9, 11, 5, 7, 13, 15>(block[i * 2 * stride], block[(i * 2 + 1) * stride]);
@@ -1750,79 +1729,94 @@ static inline void transpose_8x8(Vec8f block[/* 8 */]) {
     }
 
     for (int i = 0; i < 4; ++i) {
-        Vec8f temp1 = blend8<0, 2, 8, 10, 4, 6, 12, 14>(block[(i + (i & -2)) * stride], block[(i + (i & -2) + 2) * stride]);
-        Vec8f temp2 = blend8<1, 3, 9, 11, 5, 7, 13, 15>(block[(i + (i & -2)) * stride], block[(i + (i & -2) + 2) * stride]);
+        Vec8f temp1 =
+            blend8<0, 2, 8, 10, 4, 6, 12, 14>(block[(i + (i & -2)) * stride], block[(i + (i & -2) + 2) * stride]);
+        Vec8f temp2 =
+            blend8<1, 3, 9, 11, 5, 7, 13, 15>(block[(i + (i & -2)) * stride], block[(i + (i & -2) + 2) * stride]);
         block[(i + (i & -2)) * stride] = temp1;
         block[(i + (i & -2) + 2) * stride] = temp2;
     }
 
     for (int i = 0; i < 4; ++i) {
-        Vec8f temp1 = reinterpret_f(blend4<0, 1, 4, 5>(Vec4d(reinterpret_d(block[i * stride])), reinterpret_d(block[(i + 4) * stride])));
-        Vec8f temp2 = reinterpret_f(blend4<2, 3, 6, 7>(Vec4d(reinterpret_d(block[i * stride])), reinterpret_d(block[(i + 4) * stride])));
+        Vec8f temp1 = reinterpret_f(
+            blend4<0, 1, 4, 5>(Vec4d(reinterpret_d(block[i * stride])), reinterpret_d(block[(i + 4) * stride]))
+        );
+        Vec8f temp2 = reinterpret_f(
+            blend4<2, 3, 6, 7>(Vec4d(reinterpret_d(block[i * stride])), reinterpret_d(block[(i + 4) * stride]))
+        );
         block[i * stride] = temp1;
         block[(i + 4) * stride] = temp2;
     }
 }
 
-template <int stride = 1>
-static inline void transpose_16x16(Vec16f block[/* 16 */]) {
-    #pragma GCC unroll 2
+template <int stride = 1> static inline void transpose_16x16(Vec16f block[/* 16 */]) {
+#pragma GCC unroll 2
     for (int i = 0; i < 2; i++) {
-        #pragma GCC unroll 2
+#pragma GCC unroll 2
         for (int j = 0; j < 2; j++) {
-            #pragma GCC unroll 2
+#pragma GCC unroll 2
             for (int k = 0; k < 2; k++) {
                 auto id1 = ((i * 2 + j) * 2 + k) * 2 * stride;
                 auto id2 = (((i * 2 + j) * 2 + k) * 2 + 1) * stride;
-                Vec16f temp1 = blend16<0, 2, 16, 18, 4, 6, 20, 22, 8, 10, 24, 26, 12, 14, 28, 30>(block[id1], block[id2]);
-                Vec16f temp2 = blend16<1, 3, 17, 19, 5, 7, 21, 23, 9, 11, 25, 27, 13, 15, 29, 31>(block[id1], block[id2]);
+                Vec16f temp1 =
+                    blend16<0, 2, 16, 18, 4, 6, 20, 22, 8, 10, 24, 26, 12, 14, 28, 30>(block[id1], block[id2]);
+                Vec16f temp2 =
+                    blend16<1, 3, 17, 19, 5, 7, 21, 23, 9, 11, 25, 27, 13, 15, 29, 31>(block[id1], block[id2]);
                 block[id1] = temp1;
                 block[id2] = temp2;
             }
 
-            #pragma GCC unroll 2
+#pragma GCC unroll 2
             for (int k = 0; k < 2; k++) {
                 auto id1 = (((i * 2 + j) * 2) * 2 + k) * stride;
                 auto id2 = (((i * 2 + j) * 2 + 1) * 2 + k) * stride;
-                Vec16f temp1 = blend16<0, 2, 16, 18, 4, 6, 20, 22, 8, 10, 24, 26, 12, 14, 28, 30>(block[id1], block[id2]);
-                Vec16f temp2 = blend16<1, 3, 17, 19, 5, 7, 21, 23, 9, 11, 25, 27, 13, 15, 29, 31>(block[id1], block[id2]);
+                Vec16f temp1 =
+                    blend16<0, 2, 16, 18, 4, 6, 20, 22, 8, 10, 24, 26, 12, 14, 28, 30>(block[id1], block[id2]);
+                Vec16f temp2 =
+                    blend16<1, 3, 17, 19, 5, 7, 21, 23, 9, 11, 25, 27, 13, 15, 29, 31>(block[id1], block[id2]);
                 block[id1] = temp1;
                 block[id2] = temp2;
             }
         }
 
-        #pragma GCC unroll 4
+#pragma GCC unroll 4
         for (int j = 0; j < 4; j++) {
             auto id1 = (i * 8 + j) * stride;
             auto id2 = (i * 8 + 4 + j) * stride;
-            Vec16f temp1 = reinterpret_f(blend8<0, 1, 8, 9, 4, 5, 12, 13>(Vec8d(reinterpret_d(block[id1])), reinterpret_d(block[id2])));
-            Vec16f temp2 = reinterpret_f(blend8<2, 3, 10, 11, 6, 7, 14, 15>(Vec8d(reinterpret_d(block[id1])), reinterpret_d(block[id2])));
+            Vec16f temp1 = reinterpret_f(
+                blend8<0, 1, 8, 9, 4, 5, 12, 13>(Vec8d(reinterpret_d(block[id1])), reinterpret_d(block[id2]))
+            );
+            Vec16f temp2 = reinterpret_f(
+                blend8<2, 3, 10, 11, 6, 7, 14, 15>(Vec8d(reinterpret_d(block[id1])), reinterpret_d(block[id2]))
+            );
             block[id1] = temp1;
             block[id2] = temp2;
         }
     }
 
-    #pragma GCC unroll 8
+#pragma GCC unroll 8
     for (int i = 0; i < 8; i++) {
-        Vec16f temp1 = reinterpret_f(blend8<0, 1, 2, 3, 8, 9, 10, 11>(Vec8d(reinterpret_d(block[i * stride])), reinterpret_d(block[(i + 8) * stride])));
-        Vec16f temp2 = reinterpret_f(blend8<4, 5, 6, 7, 12, 13, 14, 15>(Vec8d(reinterpret_d(block[i * stride])), reinterpret_d(block[(i + 8) * stride])));
+        Vec16f temp1 = reinterpret_f(
+            blend8<0, 1, 2, 3, 8, 9, 10, 11>(
+                Vec8d(reinterpret_d(block[i * stride])), reinterpret_d(block[(i + 8) * stride])
+            )
+        );
+        Vec16f temp2 = reinterpret_f(
+            blend8<4, 5, 6, 7, 12, 13, 14, 15>(
+                Vec8d(reinterpret_d(block[i * stride])), reinterpret_d(block[(i + 8) * stride])
+            )
+        );
         block[i * stride] = temp1;
         block[(i + 8) * stride] = temp2;
     }
 }
 
-template <int stride = 1>
-static inline void transpose_32x16(Vec16f block[/* 16 * 2 */]) {
+template <int stride = 1> static inline void transpose_32x16(Vec16f block[/* 16 * 2 */]) {
     transpose_16x16<2 * stride>(block);
     transpose_16x16<2 * stride>(block + stride);
 }
 
-static inline void remove_mean(
-    Vec16f * __restrict block,
-    float gf,
-    const Vec16f * __restrict window_freq,
-    int radius
-) {
+static inline void remove_mean(Vec16f* __restrict block, float gf, const Vec16f* __restrict window_freq, int radius) {
 
     for (int i = 0; i < (2 * radius + 1) * 32; i++) {
         block[i] -= gf * window_freq[i];
@@ -1830,8 +1824,8 @@ static inline void remove_mean(
 }
 
 static inline void frequency_filtering(
-    Vec16f * __restrict block,
-    const Vec16f * __restrict sigma,
+    Vec16f* __restrict block,
+    const Vec16f* __restrict sigma,
     float sigma2,
     float pmin,
     float pmax,
@@ -1895,12 +1889,7 @@ static inline void frequency_filtering(
     }
 }
 
-static inline void add_mean(
-    Vec16f * __restrict block,
-    float gf,
-    const Vec16f * __restrict window_freq,
-    int radius
-) {
+static inline void add_mean(Vec16f* __restrict block, float gf, const Vec16f* __restrict window_freq, int radius) {
 
     for (int i = 0; i < (2 * radius + 1) * 32; i++) {
         block[i] += gf * window_freq[i];
@@ -1908,14 +1897,14 @@ static inline void add_mean(
 }
 
 static inline void fused(
-    Vec16f * __restrict block,
-    const Vec16f * __restrict sigma,
+    Vec16f* __restrict block,
+    const Vec16f* __restrict sigma,
     float sigma2,
     float pmin,
     float pmax,
     int filter_type,
     bool zero_mean,
-    const Vec16f * __restrict window_freq,
+    const Vec16f* __restrict window_freq,
     int radius
 ) {
 
@@ -1926,31 +1915,31 @@ static inline void fused(
         dft<16>(&block[i * 32]);
     }
     if (radius == 0) {
-        #pragma GCC unroll 16
+#pragma GCC unroll 16
         for (int i = 0; i < 16; i++) {
             dft<1>(&block[i * 2], 16);
         }
     }
     if (radius == 1) {
-        #pragma GCC unroll 16
+#pragma GCC unroll 16
         for (int i = 0; i < 16; i++) {
             dft<3>(&block[i * 2], 16);
         }
     }
     if (radius == 2) {
-        #pragma GCC unroll 16
+#pragma GCC unroll 16
         for (int i = 0; i < 16; i++) {
             dft<5>(&block[i * 2], 16);
         }
     }
     if (radius == 3) {
-        #pragma GCC unroll 16
+#pragma GCC unroll 16
         for (int i = 0; i < 16; i++) {
             dft<7>(&block[i * 2], 16);
         }
     }
 
-    float gf {};
+    float gf{};
     if (zero_mean) {
         gf = block[0].extract(0) / window_freq[0].extract(0);
         remove_mean(block, gf, window_freq, radius);
@@ -1963,25 +1952,25 @@ static inline void fused(
     }
 
     if (radius == 0) {
-        #pragma GCC unroll 16
+#pragma GCC unroll 16
         for (int i = 0; i < 16; i++) {
             idft<1>(&block[i * 2], 16);
         }
     }
     if (radius == 1) {
-        #pragma GCC unroll 16
+#pragma GCC unroll 16
         for (int i = 0; i < 16; i++) {
             idft<3>(&block[i * 2], 16);
         }
     }
     if (radius == 2) {
-        #pragma GCC unroll 16
+#pragma GCC unroll 16
         for (int i = 0; i < 16; i++) {
             idft<5>(&block[i * 2], 16);
         }
     }
     if (radius == 3) {
-        #pragma GCC unroll 16
+#pragma GCC unroll 16
         for (int i = 0; i < 16; i++) {
             idft<7>(&block[i * 2], 16);
         }

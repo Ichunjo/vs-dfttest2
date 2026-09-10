@@ -1,35 +1,33 @@
+#include <VSHelper4.h>
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
 #include <vector>
 
-#include <VSHelper4.h>
-
 #include "dfttest2_cpu.h"
 #include "kernel.hpp"
 
-
 static inline int calc_pad_size(int size, int block_size, int block_step) {
     return (
-        size
-        + ((size % block_size) ? block_size - size % block_size : 0)
-        + std::max(block_size - block_step, block_step) * 2
+        size + ((size % block_size) ? block_size - size % block_size : 0) +
+        std::max(block_size - block_step, block_step) * 2
     );
 }
-
 
 static inline int calc_pad_num(int size, int block_size, int block_step) {
     return (calc_pad_size(size, block_size, block_step) - block_size) / block_step + 1;
 }
 
-
 template <typename T>
 static inline void reflection_padding_impl(
-    T * VS_RESTRICT dst, // shape: (pad_height, pad_width)
-    const T * VS_RESTRICT src, // shape: (height, stride)
-    int width, int height, int stride,
-    int block_size, int block_step
+    T* VS_RESTRICT dst,       // shape: (pad_height, pad_width)
+    const T* VS_RESTRICT src, // shape: (height, stride)
+    int width,
+    int height,
+    int stride,
+    int block_size,
+    int block_step
 ) {
 
     int pad_width = calc_pad_size(width, block_size, block_step);
@@ -39,9 +37,7 @@ static inline void reflection_padding_impl(
     int offset_x = (pad_width - width) / 2;
 
     vsh::bitblt(
-        &dst[offset_y * pad_width + offset_x], pad_width * sizeof(T),
-        src, stride * sizeof(T),
-        width * sizeof(T), height
+        &dst[offset_y * pad_width + offset_x], pad_width * sizeof(T), src, stride * sizeof(T), width * sizeof(T), height
     );
 
     // copy left and right regions
@@ -59,66 +55,62 @@ static inline void reflection_padding_impl(
 
     // copy top region
     for (int y = 0; y < offset_y; y++) {
-        std::memcpy(
-            &dst[y * pad_width],
-            &dst[(offset_y * 2 - y) * pad_width],
-            pad_width * sizeof(T)
-        );
+        std::memcpy(&dst[y * pad_width], &dst[(offset_y * 2 - y) * pad_width], pad_width * sizeof(T));
     }
 
     // copy bottom region
     for (int y = offset_y + height; y < pad_height; y++) {
-        std::memcpy(
-            &dst[y * pad_width],
-            &dst[(2 * (offset_y + height) - 2 - y) * pad_width],
-            pad_width * sizeof(T)
-        );
+        std::memcpy(&dst[y * pad_width], &dst[(2 * (offset_y + height) - 2 - y) * pad_width], pad_width * sizeof(T));
     }
 }
 
-
 static inline void reflection_padding(
-    uint8_t * VS_RESTRICT dst, // shape: (pad_height, pad_width)
-    const uint8_t * VS_RESTRICT src, // shape: (height, stride)
-    int width, int height, int stride,
-    int block_size, int block_step,
+    uint8_t* VS_RESTRICT dst,       // shape: (pad_height, pad_width)
+    const uint8_t* VS_RESTRICT src, // shape: (height, stride)
+    int width,
+    int height,
+    int stride,
+    int block_size,
+    int block_step,
     int bytes_per_sample
 ) {
 
     if (bytes_per_sample == 1) {
         reflection_padding_impl(
-            static_cast<uint8_t *>(dst),
-            static_cast<const uint8_t *>(src),
-            width, height, stride,
-            block_size, block_step
+            static_cast<uint8_t*>(dst), static_cast<const uint8_t*>(src), width, height, stride, block_size, block_step
         );
     } else if (bytes_per_sample == 2) {
         reflection_padding_impl(
-            reinterpret_cast<uint16_t *>(dst),
-            reinterpret_cast<const uint16_t *>(src),
-            width, height, stride,
-            block_size, block_step
+            reinterpret_cast<uint16_t*>(dst),
+            reinterpret_cast<const uint16_t*>(src),
+            width,
+            height,
+            stride,
+            block_size,
+            block_step
         );
     } else if (bytes_per_sample == 4) {
         reflection_padding_impl(
-            reinterpret_cast<uint32_t *>(dst),
-            reinterpret_cast<const uint32_t *>(src),
-            width, height, stride,
-            block_size, block_step
+            reinterpret_cast<uint32_t*>(dst),
+            reinterpret_cast<const uint32_t*>(src),
+            width,
+            height,
+            stride,
+            block_size,
+            block_step
         );
     }
 }
 
-
 static inline void load_block(
-    Vec16f * VS_RESTRICT block,
-    const uint8_t * VS_RESTRICT shifted_src,
+    Vec16f* VS_RESTRICT block,
+    const uint8_t* VS_RESTRICT shifted_src,
     int radius,
     int block_size,
     int block_step,
     int width,
     int height,
-    const Vec16f * VS_RESTRICT window,
+    const Vec16f* VS_RESTRICT window,
     int bits_per_sample
 ) {
 
@@ -138,7 +130,7 @@ static inline void load_block(
     if (bytes_per_sample == 1) {
         for (int i = 0; i < 2 * radius + 1; i++) {
             for (int j = 0; j < block_size; j++) {
-                auto vec_input = Vec16uc().load((const uint8_t *) shifted_src + (i * offset_y + j) * offset_x);
+                auto vec_input = Vec16uc().load((const uint8_t*)shifted_src + (i * offset_y + j) * offset_x);
                 auto vec_input_f = to_float(Vec16i(extend(extend(vec_input))));
                 block[i * block_size * 2 + j] = scale * window[i * block_size + j] * vec_input_f;
             }
@@ -147,7 +139,7 @@ static inline void load_block(
     if (bytes_per_sample == 2) {
         for (int i = 0; i < 2 * radius + 1; i++) {
             for (int j = 0; j < block_size; j++) {
-                auto vec_input = Vec16us().load((const uint16_t *) shifted_src + (i * offset_y + j) * offset_x);
+                auto vec_input = Vec16us().load((const uint16_t*)shifted_src + (i * offset_y + j) * offset_x);
                 auto vec_input_f = to_float(Vec16i(extend(vec_input)));
                 block[i * block_size * 2 + j] = scale * window[i * block_size + j] * vec_input_f;
             }
@@ -156,37 +148,35 @@ static inline void load_block(
     if (bytes_per_sample == 4) {
         for (int i = 0; i < 2 * radius + 1; i++) {
             for (int j = 0; j < block_size; j++) {
-                auto vec_input_f = Vec16f().load((const float *) shifted_src + (i * offset_y + j) * offset_x);
+                auto vec_input_f = Vec16f().load((const float*)shifted_src + (i * offset_y + j) * offset_x);
                 block[i * block_size * 2 + j] = scale * window[i * block_size + j] * vec_input_f;
             }
         }
     }
 }
 
-
 static inline void store_block(
-    float * VS_RESTRICT shifted_dst,
-    const Vec16f * VS_RESTRICT shifted_block,
+    float* VS_RESTRICT shifted_dst,
+    const Vec16f* VS_RESTRICT shifted_block,
     int block_size,
     int block_step,
     int width,
-    const Vec16f * VS_RESTRICT shifted_window
+    const Vec16f* VS_RESTRICT shifted_window
 ) {
 
     assert(block_size == 16);
     block_size = 16; // unsafe
 
     for (int i = 0; i < block_size; i++) {
-        Vec16f acc = Vec16f().load((const float *) shifted_dst + (i * calc_pad_size(width, block_size, block_step)));
+        Vec16f acc = Vec16f().load((const float*)shifted_dst + (i * calc_pad_size(width, block_size, block_step)));
         acc = mul_add(shifted_block[i], shifted_window[i], acc);
-        acc.store((float *) shifted_dst + (i * calc_pad_size(width, block_size, block_step)));
+        acc.store((float*)shifted_dst + (i * calc_pad_size(width, block_size, block_step)));
     }
 }
 
-
 static inline void store_frame(
-    uint8_t * VS_RESTRICT dst,
-    const float * VS_RESTRICT shifted_src,
+    uint8_t* VS_RESTRICT dst,
+    const float* VS_RESTRICT shifted_src,
     int width,
     int height,
     int dst_stride,
@@ -203,7 +193,7 @@ static inline void store_frame(
     int peak = (1 << bits_per_sample) - 1;
 
     if (bytes_per_sample == 1) {
-        auto dstp = (uint8_t *) dst;
+        auto dstp = (uint8_t*)dst;
         for (int y = 0; y < height; y++) {
             for (int x = 0; x < width; x++) {
                 auto clamped = std::clamp(static_cast<int>(shifted_src[y * src_stride + x] / scale + 0.5f), 0, peak);
@@ -212,7 +202,7 @@ static inline void store_frame(
         }
     }
     if (bytes_per_sample == 2) {
-        auto dstp = (uint16_t *) dst;
+        auto dstp = (uint16_t*)dst;
         for (int y = 0; y < height; y++) {
             for (int x = 0; x < width; x++) {
                 auto clamped = std::clamp(static_cast<int>(shifted_src[y * src_stride + x] / scale + 0.5f), 0, peak);
@@ -221,7 +211,7 @@ static inline void store_frame(
         }
     }
     if (bytes_per_sample == 4) {
-        auto dstp = (float *) dst;
+        auto dstp = (float*)dst;
         for (int y = 0; y < height; y++) {
             for (int x = 0; x < width; x++) {
                 dstp[y * dst_stride + x] = shifted_src[y * src_stride + x] / scale;
@@ -230,19 +220,21 @@ static inline void store_frame(
     }
 }
 
-
-const VSFrame * VS_CC
+const VSFrame* VS_CC
 #ifndef HAS_DISPATCH
 DFTTestGetFrame
-#else // HAS_DISPATCH
+#else  // HAS_DISPATCH
 DFTTEST_GETFRAME_NAME
 #endif // HAS_DISPATCH
-(
-    int n, int activationReason, void *instanceData, void **frameData,
-    VSFrameContext *frameCtx, VSCore *core, const VSAPI *vsapi
-) noexcept {
+    (int n,
+     int activationReason,
+     void* instanceData,
+     void** frameData,
+     VSFrameContext* frameCtx,
+     VSCore* core,
+     const VSAPI* vsapi) noexcept {
 
-    auto d = static_cast<DFTTestData *>(instanceData);
+    auto d = static_cast<DFTTestData*>(instanceData);
 
     if (activationReason == arInitial) {
         int start = std::max(n - d->radius, 0);
@@ -265,37 +257,33 @@ DFTTEST_GETFRAME_NAME
 
     auto thread_id = std::this_thread::get_id();
     if (d->num_uninitialized_threads.load(std::memory_order_acquire) == 0) {
-        const auto & const_data = d->thread_data;
+        const auto& const_data = d->thread_data;
         thread_data = const_data.at(thread_id);
     } else {
         bool initialized = true;
 
         d->thread_data_lock.lock_shared();
         try {
-            const auto & const_data = d->thread_data;
+            const auto& const_data = d->thread_data;
             thread_data = const_data.at(thread_id);
-        } catch (const std::out_of_range &) {
+        } catch (const std::out_of_range&) {
             initialized = false;
         }
         d->thread_data_lock.unlock_shared();
 
         if (!initialized) {
-            auto padded_size = (
-                (2 * d->radius + 1) *
-                calc_pad_size(vi->height, d->block_size, d->block_step) *
-                calc_pad_size(vi->width, d->block_size, d->block_step) *
-                vi->format.bytesPerSample
-            );
+            auto padded_size =
+                ((2 * d->radius + 1) * calc_pad_size(vi->height, d->block_size, d->block_step) *
+                 calc_pad_size(vi->width, d->block_size, d->block_step) * vi->format.bytesPerSample);
 
-            thread_data.padded = static_cast<uint8_t *>(std::malloc(padded_size));
-            thread_data.padded2 = static_cast<float *>(std::malloc(
+            thread_data.padded = static_cast<uint8_t*>(std::malloc(padded_size));
+            thread_data.padded2 = static_cast<float*>(std::malloc(
                 calc_pad_size(vi->height, d->block_size, d->block_step) *
-                calc_pad_size(vi->width, d->block_size, d->block_step) *
-                sizeof(float)
+                calc_pad_size(vi->width, d->block_size, d->block_step) * sizeof(float)
             ));
 
             {
-                std::lock_guard _ { d->thread_data_lock };
+                std::lock_guard _{d->thread_data_lock};
                 d->thread_data.emplace(thread_id, thread_data);
             }
 
@@ -303,24 +291,22 @@ DFTTEST_GETFRAME_NAME
         }
     }
 
-    std::vector<const VSFrame *> src_frames;
+    std::vector<const VSFrame*> src_frames;
     src_frames.reserve(2 * d->radius + 1);
     for (int i = n - d->radius; i <= n + d->radius; i++) {
-        src_frames.push_back(
-            vsapi->getFrameFilter(std::clamp(i, 0, vi->numFrames - 1), d->node, frameCtx)
-        );
+        src_frames.push_back(vsapi->getFrameFilter(std::clamp(i, 0, vi->numFrames - 1), d->node, frameCtx));
     }
 
     auto src_center_frame = src_frames[d->radius];
     auto format = vsapi->getVideoFrameFormat(src_center_frame);
 
-    const VSFrame * fr[] {
+    const VSFrame* fr[]{
         d->process[0] ? nullptr : src_center_frame,
         d->process[1] ? nullptr : src_center_frame,
         d->process[2] ? nullptr : src_center_frame
     };
-    const int pl[] { 0, 1, 2 };
-    VSFrame * dst_frame = vsapi->newVideoFrame2(format, vi->width, vi->height, fr, pl, src_center_frame, core);
+    const int pl[]{0, 1, 2};
+    VSFrame* dst_frame = vsapi->newVideoFrame2(format, vi->width, vi->height, fr, pl, src_center_frame, core);
 
     for (int plane = 0; plane < format->numPlanes; plane++) {
         if (!d->process[plane]) {
@@ -331,15 +317,14 @@ DFTTEST_GETFRAME_NAME
         int height = vsapi->getFrameHeight(src_center_frame, plane);
         int stride = static_cast<int>(vsapi->getStride(src_center_frame, plane) / vi->format.bytesPerSample);
 
-        int padded_size_spatial = (
-            calc_pad_size(height, d->block_size, d->block_step) *
-            calc_pad_size(width, d->block_size, d->block_step)
-        );
+        int padded_size_spatial =
+            (calc_pad_size(height, d->block_size, d->block_step) * calc_pad_size(width, d->block_size, d->block_step));
 
-        std::memset(thread_data.padded2, 0,
-            calc_pad_size(height, d->block_size, d->block_step) *
-            calc_pad_size(width, d->block_size, d->block_step) *
-            sizeof(float)
+        std::memset(
+            thread_data.padded2,
+            0,
+            calc_pad_size(height, d->block_size, d->block_step) * calc_pad_size(width, d->block_size, d->block_step) *
+                sizeof(float)
         );
 
         for (int i = 0; i < 2 * d->radius + 1; i++) {
@@ -347,8 +332,11 @@ DFTTEST_GETFRAME_NAME
             reflection_padding(
                 &thread_data.padded[(i * padded_size_spatial) * vi->format.bytesPerSample],
                 srcp,
-                width, height, stride,
-                d->block_size, d->block_step,
+                width,
+                height,
+                stride,
+                d->block_size,
+                d->block_step,
                 vi->format.bytesPerSample
             );
         }
@@ -365,21 +353,24 @@ DFTTEST_GETFRAME_NAME
                 load_block(
                     block,
                     &thread_data.padded[(i * offset_x + j) * d->block_step * vi->format.bytesPerSample],
-                    d->radius, d->block_size, d->block_step,
-                    width, height,
-                    reinterpret_cast<const Vec16f *>(d->window.get()),
+                    d->radius,
+                    d->block_size,
+                    d->block_step,
+                    width,
+                    height,
+                    reinterpret_cast<const Vec16f*>(d->window.get()),
                     vi->format.bitsPerSample
                 );
 
                 fused(
                     block,
-                    reinterpret_cast<const Vec16f *>(d->sigma.get()),
+                    reinterpret_cast<const Vec16f*>(d->sigma.get()),
                     d->sigma2,
                     d->pmin,
                     d->pmax,
                     d->filter_type,
                     d->zero_mean,
-                    reinterpret_cast<const Vec16f *>(d->window_freq.get()),
+                    reinterpret_cast<const Vec16f*>(d->window_freq.get()),
                     d->radius
                 );
 
@@ -389,7 +380,7 @@ DFTTEST_GETFRAME_NAME
                     block_size,
                     d->block_step,
                     width,
-                    reinterpret_cast<const Vec16f *>(&d->window[d->radius * block_size * 2 * 16])
+                    reinterpret_cast<const Vec16f*>(&d->window[d->radius * block_size * 2 * 16])
                 );
             }
         }
@@ -420,10 +411,9 @@ DFTTEST_GETFRAME_NAME
     return dst_frame;
 }
 
-
 #ifndef HAS_DISPATCH
 bool supported_arch() noexcept {
-#else // HAS_DISPATCH
+#else  // HAS_DISPATCH
 bool SUPPORTED_ARCH_NAME() noexcept {
 #endif // HAS_DISPATCH
 
@@ -431,7 +421,7 @@ bool SUPPORTED_ARCH_NAME() noexcept {
 }
 
 #ifndef HAS_DISPATCH
-const char * target_arch() noexcept {
+const char* target_arch() noexcept {
 #if 0 <= INSTRSET && INSTRSET <= 10
     constexpr std::array dispatch_targets {
         "80386", "sse", "sse2", "sse3", "sse4.1", "sse4.2",
