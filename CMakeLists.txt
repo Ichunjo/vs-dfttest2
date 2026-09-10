@@ -168,8 +168,6 @@ else()
     set(VCS_TAG "unknown")
 endif()
 
-configure_file(common/config.h.in config.h)
-
 if(ENABLE_CUDA)
     target_include_directories(dfttest2_cuda PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
     target_include_directories(dfttest2_nvrtc PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
