@@ -1126,7 +1126,7 @@ VapourSynthPluginInit2(VSPlugin* plugin, const VSPLUGINAPI* vspapi) {
         "RDFT",
         "data:float[];"
         "shape:int[];",
-        "any",
+        "window_freq:float[];",
         RDFT,
         nullptr,
         plugin

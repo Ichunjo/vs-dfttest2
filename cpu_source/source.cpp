@@ -391,7 +391,7 @@ VS_EXTERNAL_API(void) VapourSynthPluginInit2(VSPlugin* plugin, const VSPLUGINAPI
         "RDFT",
         "data:float[];"
         "shape:int[];",
-        "any",
+        "window_freq:float[];",
         RDFT,
         nullptr,
         plugin
