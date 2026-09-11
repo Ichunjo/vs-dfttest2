@@ -379,6 +379,26 @@ def DFTTest2(
             **kwargs,
         )
 
+    if isinstance(backend_inst, Backend.NVRTC):
+        sigma_val = [sigma_norm] if not isinstance(sigma_norm, list) else sigma_norm
+        return plugin.DFTTest(
+            clip,
+            window=window,
+            sigma=sigma_val,
+            sigma2=sigma2,
+            pmin=pmin,
+            pmax=pmax,
+            filter_type=filter_type,
+            radius=radius,
+            block_size=block_size,
+            block_step=block_step,
+            zero_mean=int(zero_mean),
+            window_freq=window_freq if zero_mean else None,
+            planes=planes,
+            device_id=backend_inst.device_id,
+            num_streams=backend_inst.num_streams,
+        )
+
     to_single = plugin.ToSingle
     sigma_str = (
         to_single(sigma_norm) if not isinstance(sigma_norm, list) else ",".join(str(to_single(x)) for x in sigma_norm)

@@ -1,38 +1,25 @@
-// dft implementations in this file are derived from FFTW 3.3.10
+#pragma once
 
-#ifndef DFT_KERNELS_HPP
-#define DFT_KERNELS_HPP
+// Auto-generated FFT codelets from FFTW 3.3.10
 
-static const auto fft_header = R"""(
-#define K(x) ((E) x)
+#define K(x) ((E)x)
 #define DK(name, value) const E name = K(value)
 #define FMA(a, b, c) (((a) * (b)) + (c))
 #define FMS(a, b, c) (((a) * (b)) - (c))
-#define FNMA(a, b, c) (- (((a) * (b)) + (c)))
+#define FNMA(a, b, c) (-(((a) * (b)) + (c)))
 #define FNMS(a, b, c) ((c) - ((a) * (b)))
 
-template <int n>
-__device__
-static void rdft(float data[(n / 2 + 1) * 2]);
+template <int n> __device__ static void rdft(float data[(n / 2 + 1) * 2]);
 
-template <int n>
-__device__
-static void dft(float data[/* (n - 1) * stride * 2 + 2 */], int stride = 1);
+template <int n> __device__ static void dft(float data[/* (n - 1) * stride * 2 + 2 */], int stride = 1);
 
-template <int n>
-__device__
-static void idft(float data[/* (n - 1) * stride * 2 + 2 */], int stride = 1);
+template <int n> __device__ static void idft(float data[/* (n - 1) * stride * 2 + 2 */], int stride = 1);
 
-template <int n>
-__device__
-static void irdft(float data[(n / 2 + 1) * 2]);
-)""";
+template <int n> __device__ static void irdft(float data[(n / 2 + 1) * 2]);
 
-static const char* rdft_implementations[]{R"""(
 // ./gen_r2cf.native -standalone -with-rs 2 -with-csr 2 -with-csi 2 -fma -n 16
 template <>
-__device__
-[[maybe_unused]]
+__device__ [[maybe_unused]]
 void rdft<16>(float data[18]) {
     using E = float;
 
@@ -199,23 +186,14 @@ void rdft<16>(float data[18]) {
     Ci[16] = 0.0f;
 }
 
-)"""};
-
-static const char* dft_implementations[]{
-    R"""(
 // ./gen_notw.native -standalone -with-istride 2 -with-ostride 2 -fma -n 1 -sign -1
 template <>
-__device__
-[[maybe_unused]]
-void dft<1>(float data[2], int stride) {
-}
+__device__ [[maybe_unused]]
+void dft<1>(float data[2], int stride) {}
 
-)""",
-    R"""(
 // ./gen_notw.native -standalone -with-istride 2 -with-ostride 2 -fma -n 3 -sign -1
 template <>
-__device__
-[[maybe_unused]]
+__device__ [[maybe_unused]]
 void dft<3>(float data[/* 4 * stride + 2 */], int stride) {
     using E = float;
 
@@ -261,12 +239,9 @@ void dft<3>(float data[/* 4 * stride + 2 */], int stride) {
     io[4 * stride] = FNMS(KP866025403, T12, T11);
 }
 
-)""",
-    R"""(
 // ./gen_notw.native -standalone -with-istride 2 -with-ostride 2 -fma -n 5 -sign -1
 template <>
-__device__
-[[maybe_unused]]
+__device__ [[maybe_unused]]
 void dft<5>(float data[/* 8 * stride + 2 */], int stride) {
     using E = float;
 
@@ -364,12 +339,9 @@ void dft<5>(float data[/* 8 * stride + 2 */], int stride) {
     }
 }
 
-)""",
-    R"""(
 // ./gen_notw.native -standalone -with-istride 2 -with-ostride 2 -fma -n 7 -sign -1
 template <>
-__device__
-[[maybe_unused]]
+__device__ [[maybe_unused]]
 void dft<7>(float data[/* 12 * stride + 2 */], int stride) {
     using E = float;
 
@@ -525,12 +497,9 @@ void dft<7>(float data[/* 12 * stride + 2 */], int stride) {
     }
 }
 
-)""",
-    R"""(
 // ./gen_notw.native -standalone -with-istride 2 -with-ostride 2 -fma -n 16 -sign -1
 template <>
-__device__
-[[maybe_unused]]
+__device__ [[maybe_unused]]
 void dft<16>(float data[/* 30 * stride + 2 */], int stride) {
     using E = float;
 
@@ -904,24 +873,15 @@ void dft<16>(float data[/* 30 * stride + 2 */], int stride) {
         ro[10 * stride] = FMA(KP923879532, T112, T109);
     }
 }
-)"""
-};
 
-static const char* idft_implementations[]{
-    R"""(
 // ./gen_notw.native -standalone -with-istride 2 -with-ostride 2 -fma -n 1 -sign 1
 template <>
-__device__
-[[maybe_unused]]
-void idft<1>(float data[2], int stride) {
-}
+__device__ [[maybe_unused]]
+void idft<1>(float data[2], int stride) {}
 
-)""",
-    R"""(
 // ./gen_notw.native -standalone -with-istride 2 -with-ostride 2 -fma -n 3 -sign 1
 template <>
-__device__
-[[maybe_unused]]
+__device__ [[maybe_unused]]
 void idft<3>(float data[/* 4 * stride + 2 */], int stride) {
     using E = float;
 
@@ -967,12 +927,9 @@ void idft<3>(float data[/* 4 * stride + 2 */], int stride) {
     ro[2 * stride] = FMA(KP866025403, T12, T11);
 }
 
-)""",
-    R"""(
 // ./gen_notw.native -standalone -with-istride 2 -with-ostride 2 -fma -n 5 -sign 1
 template <>
-__device__
-[[maybe_unused]]
+__device__ [[maybe_unused]]
 void idft<5>(float data[/* 8 * stride + 2 */], int stride) {
     using E = float;
 
@@ -1070,12 +1027,9 @@ void idft<5>(float data[/* 8 * stride + 2 */], int stride) {
     }
 }
 
-)""",
-    R"""(
 // ./gen_notw.native -standalone -with-istride 2 -with-ostride 2 -fma -n 7 -sign 1
 template <>
-__device__
-[[maybe_unused]]
+__device__ [[maybe_unused]]
 void idft<7>(float data[/* 8 * stride + 2 */], int stride) {
     using E = float;
 
@@ -1231,12 +1185,9 @@ void idft<7>(float data[/* 8 * stride + 2 */], int stride) {
     }
 }
 
-)""",
-    R"""(
 // ./gen_notw.native -standalone -with-istride 2 -with-ostride 2 -fma -n 16 -sign 1
 template <>
-__device__
-[[maybe_unused]]
+__device__ [[maybe_unused]]
 void idft<16>(float data[/* 30 * stride + 2 */], int stride) {
     using E = float;
 
@@ -1465,7 +1416,7 @@ void idft<16>(float data[/* 30 * stride + 2 */], int stride) {
         T118 = T18 - T21;
         T101 = T61 - T58;
     }
-    #pragma unroll
+#pragma unroll
     for (int i = 0; i < 32; i++) {
         data[i * stride] = 0.0f;
     }
@@ -1615,14 +1566,9 @@ void idft<16>(float data[/* 30 * stride + 2 */], int stride) {
     }
 }
 
-)"""
-};
-
-static const char* irdft_implementations[]{R"""(
 // ./gen_r2cb.native -standalone -with-rs 2 -with-csr 2 -with-csi 2 -fma -n 16
 template <>
-__device__
-[[maybe_unused]]
+__device__ [[maybe_unused]]
 void irdft<16>(float data[18]) {
     using E = float;
 
@@ -1787,6 +1733,3 @@ void irdft<16>(float data[18]) {
         R1[14] = FMA(KP1_847759065, T44, T41);
     }
 }
-)"""};
-
-#endif // DFT_KERNELS

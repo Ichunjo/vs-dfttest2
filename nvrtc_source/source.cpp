@@ -33,10 +33,8 @@
 #endif
 
 #include <cuda.h>
-#include <nvrtc.h>
 
-#include "dft_kernels.hpp"
-#include "kernel.hpp"
+#include "kernels_fatbin.h"
 
 // real/complex-input DFT
 template <typename T, typename T_in>
@@ -58,9 +56,6 @@ static void dft(std::complex<T>* VS_RESTRICT dst, const T_in* VS_RESTRICT src, i
 static bool success(CUresult result) {
     return result == CUDA_SUCCESS;
 }
-static bool success(nvrtcResult result) {
-    return result == NVRTC_SUCCESS;
-}
 
 static const char* get_error(CUresult error) {
     const char* error_message;
@@ -68,10 +63,6 @@ static const char* get_error(CUresult error) {
         return error_message;
     }
     return "unknown cuda error";
-}
-
-static const char* get_error(nvrtcResult error) {
-    return nvrtcGetErrorString(error);
 }
 
 #define showError(expr) show_error_impl(expr, #expr, __LINE__)
@@ -104,10 +95,6 @@ static void cuMemFreeCustom(CUdeviceptr p) {
 
 static void cuModuleUnloadCustom(CUmodule module) {
     showError(cuModuleUnload(module));
-}
-
-static void nvrtcDestroyProgramCustom(nvrtcProgram* program) {
-    showError(nvrtcDestroyProgram(program));
 }
 
 struct context_releaser {
@@ -282,126 +269,6 @@ static void reflection_padding(
     }
 }
 
-static std::variant<CUmodule, std::string> compile(
-    const char* user_kernel,
-    CUdevice device,
-    int radius,
-    int block_size,
-    int block_step,
-    bool in_place,
-    int warp_size,
-    int warps_per_block,
-    int sample_type,
-    int bits_per_sample
-) {
-
-    auto set_error = [](const char* error_message) -> std::string { return std::string{error_message}; };
-
-    int major;
-    checkError(cuDeviceGetAttribute(&major, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR, device));
-    int minor;
-    checkError(cuDeviceGetAttribute(&minor, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR, device));
-    int compute_capability = major * 10 + minor;
-
-    // find maximum supported architecture
-    int num_archs;
-    checkError(nvrtcGetNumSupportedArchs(&num_archs));
-    const auto supported_archs = std::make_unique<int[]>(num_archs);
-    checkError(nvrtcGetSupportedArchs(supported_archs.get()));
-
-    bool generate_cubin = compute_capability <= supported_archs[num_archs - 1];
-
-    std::ostringstream kernel_source;
-    kernel_source << "#define RADIUS " << radius << '\n';
-    kernel_source << "#define BLOCK_SIZE " << block_size << '\n';
-    kernel_source << "#define BLOCK_STEP " << block_step << '\n';
-    kernel_source << "#define IN_PLACE " << (int)in_place << '\n';
-    kernel_source << "#define WARP_SIZE " << warp_size << '\n';
-    kernel_source << "#define WARPS_PER_BLOCK " << warps_per_block << '\n';
-    if (sample_type == stInteger) {
-        int bytes_per_sample = bits_per_sample / 8;
-        const char* type{};
-        if (bytes_per_sample == 1) {
-            type = "unsigned char";
-        } else if (bytes_per_sample == 2) {
-            type = "unsigned short";
-        } else if (bytes_per_sample == 4) {
-            type = "unsigned int";
-        }
-        kernel_source << "#define TYPE " << type << '\n';
-        kernel_source << "#define SCALE " << 1.0 / (1 << (bits_per_sample - 8)) << '\n';
-        kernel_source << "#define PEAK " << ((1 << bits_per_sample) - 1) << '\n';
-    } else if (sample_type == stFloat) {
-        if (bits_per_sample == 32) {
-            kernel_source << "#define TYPE float\n";
-        }
-        kernel_source << "#define SCALE 255.0\n";
-    }
-    kernel_source << user_kernel << '\n';
-    kernel_source << fft_header;
-    for (const auto& impl : rdft_implementations) {
-        kernel_source << impl;
-    }
-    for (const auto& impl : dft_implementations) {
-        kernel_source << impl;
-    }
-    for (const auto& impl : idft_implementations) {
-        kernel_source << impl;
-    }
-    for (const auto& impl : irdft_implementations) {
-        kernel_source << impl;
-    }
-    kernel_source << kernel_implementation;
-
-    nvrtcProgram program;
-    checkError(nvrtcCreateProgram(&program, kernel_source.str().c_str(), nullptr, 0, nullptr, nullptr));
-    Resource<nvrtcProgram*, nvrtcDestroyProgramCustom> destroyer{&program};
-
-    const std::string arch_str = {
-        generate_cubin ? "-arch=sm_" + std::to_string(compute_capability)
-                       : "-arch=compute_" + std::to_string(supported_archs[num_archs - 1])
-    };
-
-    const char* opts[] = {arch_str.c_str(), "-use_fast_math", "-std=c++17", "-modify-stack-limit=false"};
-
-    auto compilation = nvrtcCompileProgram(program, (int)std::extent_v<decltype(opts)>, opts);
-
-    size_t log_size;
-    showError(nvrtcGetProgramLogSize(program, &log_size));
-
-    std::string error_message;
-    if (log_size > 1) {
-        error_message.resize(log_size);
-        showError(nvrtcGetProgramLog(program, error_message.data()));
-    }
-
-    if (success(compilation)) {
-        if (log_size > 1) {
-            std::fprintf(stderr, "nvrtc: %s\n", error_message.c_str());
-        }
-    } else {
-        return error_message;
-    }
-
-    std::unique_ptr<char[]> image;
-    if (generate_cubin) {
-        size_t cubin_size;
-        checkError(nvrtcGetCUBINSize(program, &cubin_size));
-        image = std::make_unique<char[]>(cubin_size);
-        checkError(nvrtcGetCUBIN(program, image.get()));
-    } else {
-        size_t ptx_size;
-        checkError(nvrtcGetPTXSize(program, &ptx_size));
-        image = std::make_unique<char[]>(ptx_size);
-        checkError(nvrtcGetPTX(program, image.get()));
-    }
-
-    CUmodule module;
-    checkError(cuModuleLoadData(&module, image.get()));
-
-    return module;
-}
-
 struct ticket_semaphore {
     std::atomic<intptr_t> ticket{};
     std::atomic<intptr_t> current{};
@@ -445,10 +312,8 @@ struct DFTTestData {
     int block_step;
     std::array<bool, 3> process;
     CUdevice device; // device_id
-    bool in_place;
 
     int warp_size;
-
     int warps_per_block = 1;
 
     CUcontext context; // use primary context for interoperability
@@ -456,6 +321,19 @@ struct DFTTestData {
     std::vector<DFTTestStreamData> stream_data;
     std::vector<int> ticket;
     std::mutex ticket_lock;
+
+    Resource<CUdeviceptr, cuMemFreeCustom, true> d_window;
+    Resource<CUdeviceptr, cuMemFreeCustom, true> d_window_freq;
+    Resource<CUdeviceptr, cuMemFreeCustom, true> d_sigma;
+    float sigma_scalar = 0.0f;
+    int sigma_is_scalar = 1;
+    float sigma2 = 0.0f;
+    float pmin = 0.0f;
+    float pmax = 0.0f;
+    int filter_type = 0;
+    bool zero_mean = true;
+    float scale = 1.0f;
+    float peak = 255.0f;
 
     Resource<CUmodule, cuModuleUnloadCustom> module;
     CUfunction fused_kernel;
@@ -605,8 +483,29 @@ static const VSFrame* VS_CC DFTTestGetFrame(
             checkError(
                 cuMemcpyHtoDAsync(stream_data.d_padded.data, thread_data.h_padded, padded_bytes, stream_data.stream)
             );
+
+            CUdeviceptr d_window_ptr = d->d_window.data;
+            CUdeviceptr d_window_freq_ptr = d->zero_mean ? d->d_window_freq.data : 0;
+            CUdeviceptr d_sigma_ptr = d->sigma_is_scalar ? 0 : d->d_sigma.data;
+
             {
-                void* params[]{&stream_data.d_spatial.data, &stream_data.d_padded.data, &width, &height};
+                void* params[]{
+                    &stream_data.d_spatial.data,
+                    &stream_data.d_padded.data,
+                    &d_window_ptr,
+                    &d_window_freq_ptr,
+                    &d_sigma_ptr,
+                    &d->sigma_scalar,
+                    &d->sigma_is_scalar,
+                    &d->sigma2,
+                    &d->pmin,
+                    &d->pmax,
+                    &d->filter_type,
+                    &d->scale,
+                    &d->block_step,
+                    &width,
+                    &height
+                };
                 checkError(cuLaunchKernel(
                     d->fused_kernel,
                     d->fused_num_blocks,
@@ -622,7 +521,16 @@ static const VSFrame* VS_CC DFTTestGetFrame(
                 ));
             }
             {
-                void* params[]{&stream_data.d_padded.data, &stream_data.d_spatial.data, &width, &height};
+                void* params[]{
+                    &stream_data.d_padded.data,
+                    &stream_data.d_spatial.data,
+                    &d_window_ptr,
+                    &d->scale,
+                    &d->peak,
+                    &d->block_step,
+                    &width,
+                    &height
+                };
                 unsigned int vertical_size = calc_pad_size(height, d->block_size, d->block_step);
                 unsigned int horizontal_size = calc_pad_size(width, d->block_size, d->block_step);
                 unsigned int grid_x = (horizontal_size + d->warp_size - 1) / d->warp_size;
@@ -743,8 +651,6 @@ DFTTestCreate(const VSMap* in, VSMap* out, void* userData, VSCore* core, const V
         return set_error("only constant format input is supported");
     }
 
-    auto user_kernel = vsapi->mapGetData(in, "kernel", 0, nullptr);
-
     int error;
 
     d->radius = vsh::int64ToIntS(vsapi->mapGetInt(in, "radius", 0, &error));
@@ -786,14 +692,6 @@ DFTTestCreate(const VSMap* in, VSMap* out, void* userData, VSCore* core, const V
         d->process[plane] = true;
     }
 
-    d->in_place = !!(vsapi->mapGetInt(in, "in_place", 0, &error));
-    if (error) {
-        d->in_place = true;
-    }
-    if (d->in_place) {
-        return set_error("\"in_place\" not supported yet");
-    }
-
     int device_id = vsh::int64ToIntS(vsapi->mapGetInt(in, "device_id", 0, &error));
     if (error) {
         device_id = 0;
@@ -803,6 +701,76 @@ DFTTestCreate(const VSMap* in, VSMap* out, void* userData, VSCore* core, const V
     if (error) {
         num_streams = 1;
     }
+
+    int expected_window_elements = (2 * d->radius + 1) * d->block_size * d->block_size;
+    int num_window = vsapi->mapNumElements(in, "window");
+    if (num_window != expected_window_elements) {
+        return set_error("invalid window size");
+    }
+    auto window_data = vsapi->mapGetFloatArray(in, "window", nullptr);
+    std::vector<float> window_floats(num_window);
+    for (int i = 0; i < num_window; i++) {
+        window_floats[i] = static_cast<float>(window_data[i]);
+    }
+
+    int num_sigma = vsapi->mapNumElements(in, "sigma");
+    if (num_sigma <= 0) {
+        return set_error("sigma must not be empty");
+    }
+    std::vector<float> sigma_floats;
+    if (num_sigma == 1) {
+        d->sigma_scalar = static_cast<float>(vsapi->mapGetFloat(in, "sigma", 0, nullptr));
+        d->sigma_is_scalar = 1;
+    } else {
+        d->sigma_is_scalar = 0;
+        int expected_sigma_elements = (2 * d->radius + 1) * d->block_size * (d->block_size / 2 + 1);
+        if (num_sigma != expected_sigma_elements) {
+            return set_error("invalid sigma array size");
+        }
+        auto sigma_data = vsapi->mapGetFloatArray(in, "sigma", nullptr);
+        sigma_floats.resize(num_sigma);
+        for (int i = 0; i < num_sigma; i++) {
+            sigma_floats[i] = static_cast<float>(sigma_data[i]);
+        }
+    }
+
+    d->sigma2 = static_cast<float>(vsapi->mapGetFloat(in, "sigma2", 0, nullptr));
+    d->pmin = static_cast<float>(vsapi->mapGetFloat(in, "pmin", 0, nullptr));
+    d->pmax = static_cast<float>(vsapi->mapGetFloat(in, "pmax", 0, nullptr));
+    d->filter_type = static_cast<int>(vsapi->mapGetInt(in, "filter_type", 0, nullptr));
+
+    d->zero_mean = !!vsapi->mapGetInt(in, "zero_mean", 0, &error);
+    if (error) {
+        d->zero_mean = true;
+    }
+
+    std::vector<float> window_freq_floats;
+    if (d->zero_mean) {
+        int num_wf = vsapi->mapNumElements(in, "window_freq");
+        int expected_wf = (2 * d->radius + 1) * d->block_size * (d->block_size / 2 + 1) * 2;
+        if (num_wf != expected_wf) {
+            return set_error("invalid window_freq size");
+        }
+        auto wf_data = vsapi->mapGetFloatArray(in, "window_freq", nullptr);
+        window_freq_floats.resize(num_wf);
+        for (int i = 0; i < num_wf; i++) {
+            window_freq_floats[i] = static_cast<float>(wf_data[i]);
+        }
+    }
+
+    if (vi->format.sampleType == stInteger) {
+        if (vi->format.bytesPerSample > 2) {
+            return set_error("only 8-16 bit integer format input is supported");
+        }
+        d->scale = 1.0f / (1 << (vi->format.bitsPerSample - 8));
+        d->peak = static_cast<float>((1 << vi->format.bitsPerSample) - 1);
+    } else if (vi->format.sampleType == stFloat && vi->format.bitsPerSample == 32) {
+        d->scale = 255.0f;
+        d->peak = 1.0f;
+    } else {
+        return set_error("only 8-16 bit integer and 32-bit float format input is supported");
+    }
+
     d->semaphore.current.store(num_streams - 1, std::memory_order_relaxed);
     d->ticket.reserve(num_streams);
     for (int i = 0; i < num_streams; i++) {
@@ -821,39 +789,39 @@ DFTTestCreate(const VSMap* in, VSMap* out, void* userData, VSCore* core, const V
 
     checkError(cuDeviceGetAttribute(&d->warp_size, CU_DEVICE_ATTRIBUTE_WARP_SIZE, d->device));
 
-    auto compilation = compile(
-        user_kernel,
-        d->device,
-        d->radius,
-        d->block_size,
-        d->block_step,
-        d->in_place,
-        d->warp_size,
-        d->warps_per_block,
-        vi->format.sampleType,
-        vi->format.bitsPerSample
-    );
-    if (std::holds_alternative<std::string>(compilation)) {
-        std::ostringstream message;
-        message << '[' << __LINE__ << "] compile(): " << std::get<std::string>(compilation);
-        vsapi->mapSetError(out, message.str().c_str());
-        return;
+    checkError(cuMemAlloc(&d->d_window.data, window_floats.size() * sizeof(float)));
+    checkError(cuMemcpyHtoD(d->d_window.data, window_floats.data(), window_floats.size() * sizeof(float)));
+
+    if (!d->sigma_is_scalar) {
+        checkError(cuMemAlloc(&d->d_sigma.data, sigma_floats.size() * sizeof(float)));
+        checkError(cuMemcpyHtoD(d->d_sigma.data, sigma_floats.data(), sigma_floats.size() * sizeof(float)));
     }
-    d->module = std::get<CUmodule>(compilation);
+
+    if (d->zero_mean) {
+        checkError(cuMemAlloc(&d->d_window_freq.data, window_freq_floats.size() * sizeof(float)));
+        checkError(
+            cuMemcpyHtoD(d->d_window_freq.data, window_freq_floats.data(), window_freq_floats.size() * sizeof(float))
+        );
+    }
+
+    checkError(cuModuleLoadData(&d->module.data, kernels_fatbin));
+
+    const char* type_str = (vi->format.sampleType == stFloat) ? "f32" : (vi->format.bytesPerSample == 1 ? "u8" : "u16");
+    std::string fused_name =
+        "fused_r" + std::to_string(d->radius) + "_" + type_str + "_zm" + (d->zero_mean ? "1" : "0");
+    std::string col2im_name = "col2im_r" + std::to_string(d->radius) + "_" + type_str;
+
+    checkError(cuModuleGetFunction(&d->fused_kernel, d->module, fused_name.c_str()));
+    checkError(cuModuleGetFunction(&d->col2im_kernel, d->module, col2im_name.c_str()));
 
     int num_sms;
     checkError(cuDeviceGetAttribute(&num_sms, CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT, d->device));
 
-    checkError(cuModuleGetFunction(&d->fused_kernel, d->module, "fused"));
-    {
-        int max_blocks_per_sm;
-        checkError(cuOccupancyMaxActiveBlocksPerMultiprocessor(
-            &max_blocks_per_sm, d->fused_kernel, d->warps_per_block * d->warp_size, 0
-        ));
-        d->fused_num_blocks = num_sms * max_blocks_per_sm;
-    }
-
-    checkError(cuModuleGetFunction(&d->col2im_kernel, d->module, "col2im"));
+    int max_blocks_per_sm;
+    checkError(cuOccupancyMaxActiveBlocksPerMultiprocessor(
+        &max_blocks_per_sm, d->fused_kernel, d->warps_per_block * d->warp_size, 0
+    ));
+    d->fused_num_blocks = num_sms * max_blocks_per_sm;
 
     d->stream_data.resize(num_streams);
     for (int i = 0; i < num_streams; i++) {
@@ -868,13 +836,11 @@ DFTTestCreate(const VSMap* in, VSMap* out, void* userData, VSCore* core, const V
              calc_pad_size(vi->width, d->block_size, d->block_step) * vi->format.bytesPerSample);
         checkError(cuMemAlloc(&stream_data.d_padded.data, padded_bytes));
 
-        if (!d->in_place) {
-            size_t spatial_bytes =
-                (calc_pad_num(vi->height, d->block_size, d->block_step) *
-                 calc_pad_num(vi->width, d->block_size, d->block_step) * (2 * d->radius + 1) * square(d->block_size) *
-                 sizeof(float));
-            checkError(cuMemAlloc(&stream_data.d_spatial.data, spatial_bytes));
-        }
+        size_t spatial_bytes =
+            (calc_pad_num(vi->height, d->block_size, d->block_step) *
+             calc_pad_num(vi->width, d->block_size, d->block_step) * (2 * d->radius + 1) * square(d->block_size) *
+             sizeof(float));
+        checkError(cuMemAlloc(&stream_data.d_spatial.data, spatial_bytes));
     }
 
     VSCoreInfo info;
@@ -966,23 +932,6 @@ static void VS_CC RDFT(const VSMap* in, VSMap* out, void* userData, VSCore* core
     }
 }
 
-static void VS_CC ToSingle(const VSMap* in, VSMap* out, void* userData, VSCore* core, const VSAPI* vsapi) noexcept {
-
-    auto data = vsapi->mapGetFloatArray(in, "data", nullptr);
-    int num = vsapi->mapNumElements(in, "data");
-
-    auto converted_data = std::make_unique<double[]>(num);
-    for (int i = 0; i < num; i++) {
-        converted_data[i] = static_cast<float>(data[i]);
-    }
-
-    if (num == 1) {
-        vsapi->mapSetFloat(out, "ret", converted_data[0], maReplace);
-    } else {
-        vsapi->mapSetFloatArray(out, "ret", converted_data.get(), num);
-    }
-}
-
 static void Version(const VSMap*, VSMap* out, void*, VSCore*, const VSAPI* vsapi) {
     vsapi->mapSetData(out, "version", PLUGIN_VERSION_STRING, -1, dtUtf8, maReplace);
 }
@@ -1002,12 +951,18 @@ VapourSynthPluginInit2(VSPlugin* plugin, const VSPLUGINAPI* vspapi) {
     vspapi->registerFunction(
         "DFTTest",
         "clip:vnode;"
-        "kernel:data[];"
+        "window:float[];"
+        "sigma:float[];"
+        "sigma2:float;"
+        "pmin:float;"
+        "pmax:float;"
+        "filter_type:int;"
         "radius:int:opt;"
         "block_size:int:opt;"
         "block_step:int:opt;"
+        "zero_mean:int:opt;"
+        "window_freq:float[]:opt;"
         "planes:int[]:opt;"
-        "in_place:int:opt;"
         "device_id:int:opt;"
         "num_streams:int:opt;",
         "clip:vnode;",
@@ -1025,8 +980,6 @@ VapourSynthPluginInit2(VSPlugin* plugin, const VSPLUGINAPI* vspapi) {
         nullptr,
         plugin
     );
-
-    vspapi->registerFunction("ToSingle", "data:float[];", "any", ToSingle, nullptr, plugin);
 
     vspapi->registerFunction("Version", "", "any", Version, nullptr, plugin);
 }
