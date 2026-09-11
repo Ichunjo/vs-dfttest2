@@ -3,23 +3,6 @@
 
 static const auto kernel_implementation = R"""(
 __device__
-extern void filter(float2 & value, int x, int y, int z);
-
-// ZERO_MEAN
-// RADIUS
-// BLOCK_SIZE
-// BLOCK_STEP
-// WARPS_PER_BLOCK
-// WARP_SIZE
-// TYPE
-// SCALE
-// PEAK (optional)
-
-#if ZERO_MEAN
-// __device__ const float window_freq[]; // frequency response of the window
-#endif // ZERO_MEAN
-
-__device__
 static int calc_pad_size(int size, int block_size, int block_step) {
     return size + ((size % block_size) ? block_size - size % block_size : 0) + max(block_size - block_step, block_step) * 2;
 }
@@ -30,19 +13,75 @@ static int calc_pad_num(int size, int block_size, int block_step) {
 }
 
 __device__
-static float to_float(TYPE x) {
-    return static_cast<float>(x) * static_cast<float>(SCALE);
+static float to_float(TYPE x, float scale) {
+    return static_cast<float>(x) * scale;
 }
 
 __device__
-static TYPE from_float(float x) {
-#ifdef PEAK
-    x /= static_cast<float>(SCALE);
-    x = fmaxf(0.0f, fminf(x + 0.5f, static_cast<float>(PEAK)));
+static TYPE from_float(float x, float scale, float peak) {
+#if IS_FLOAT
+    return static_cast<TYPE>(x / scale);
+#else
+    x /= scale;
+    x = fmaxf(0.0f, fminf(x + 0.5f, peak));
     return static_cast<TYPE>(__float2int_rz(x));
-#else // PEAK // only integral types define it
-    return static_cast<TYPE>(x / static_cast<float>(SCALE));
-#endif // PEAK
+#endif
+}
+
+__device__ __forceinline__
+static void apply_filter(
+    float2& value,
+    int x,
+    int y,
+    int t,
+    const float* __restrict__ sigma_array,
+    float sigma_scalar,
+    int sigma_is_scalar,
+    float sigma2,
+    float pmin,
+    float pmax,
+    int filter_type,
+    int block_size
+) {
+    float sigma = sigma_is_scalar ? sigma_scalar : sigma_array[(t * block_size + y) * (block_size / 2 + 1) + x];
+
+    if (filter_type == 2) {
+        value.x *= sigma;
+        value.y *= sigma;
+        return;
+    }
+
+    float psd = value.x * value.x + value.y * value.y;
+    if (filter_type == 1) {
+        if (psd < sigma) {
+            value.x = 0.0f;
+            value.y = 0.0f;
+        }
+        return;
+    }
+
+    float multiplier;
+    switch (filter_type) {
+    case 0:
+        multiplier = fmaxf((psd - sigma) / (psd + 1e-15f), 0.0f);
+        break;
+    case 3:
+        multiplier = (psd >= pmin && psd <= pmax) ? sigma : sigma2;
+        break;
+    case 4:
+        multiplier = sigma * sqrtf(psd * (pmax / ((psd + pmin) * (psd + pmax) + 1e-15f)));
+        break;
+    case 5:
+        multiplier = powf(fmaxf((psd - sigma) / (psd + 1e-15f), 0.0f), pmin);
+        break;
+    case 6:
+    default:
+        multiplier = sqrtf(fmaxf((psd - sigma) / (psd + 1e-15f), 0.0f));
+        break;
+    }
+
+    value.x *= multiplier;
+    value.y *= multiplier;
 }
 
 // im2col + rdft + frequency_filtering + irdft
@@ -50,15 +89,24 @@ extern "C"
 __launch_bounds__(WARPS_PER_BLOCK * WARP_SIZE)
 __global__
 void fused(
-    float * __restrict__ dstp, // shape: (vertical_num, horizontal_num, 2*radius+1, block_size, block_size)
-    const TYPE * __restrict__ srcp, // shape: (2*radius+1, vertical_size, horizontal_size)
+    float * __restrict__ dstp,
+    const TYPE * __restrict__ srcp,
+    const float * __restrict__ window,
+    const float * __restrict__ window_freq,
+    const float * __restrict__ sigma_array,
+    float sigma_scalar,
+    int sigma_is_scalar,
+    float sigma2,
+    float pmin,
+    float pmax,
+    int filter_type,
+    float scale,
+    int block_step,
     int width,
     int height
 ) {
-
     constexpr int radius = static_cast<int>(RADIUS);
     constexpr int block_size = static_cast<int>(BLOCK_SIZE);
-    constexpr int block_step = static_cast<int>(BLOCK_STEP);
 
     int horizontal_num = calc_pad_num(width, block_size, block_step);
     int vertical_num = calc_pad_num(height, block_size, block_step);
@@ -84,7 +132,6 @@ void fused(
         int ix = block_id % horizontal_num;
         int iy = block_id / horizontal_num;
 
-        constexpr int active_mask = (1 << block_size) - 1;
         float2 thread_data[(2 * radius + 1) * block_size];
 
         // im2col
@@ -94,7 +141,7 @@ void fused(
             auto local_thread_data = &thread_data[i * block_size];
             #pragma unroll
             for (int j = 0; j < block_size; j++) {
-                ((float *) local_thread_data)[j] = to_float(src[j * horizontal_size + lane_id]) * window[(i * block_size + j) * block_size + lane_id];
+                ((float *) local_thread_data)[j] = to_float(src[j * horizontal_size + lane_id], scale) * window[(i * block_size + j) * block_size + lane_id];
             }
         }
 
@@ -168,7 +215,12 @@ void fused(
                     local_data.y -= val2;
 #endif // ZERO_MEAN
 
-                    filter(local_data, lane_id, j, i);
+                    apply_filter(
+                        local_data,
+                        lane_id, j, i,
+                        sigma_array, sigma_scalar, sigma_is_scalar,
+                        sigma2, pmin, pmax, filter_type, block_size
+                    );
 
 #if ZERO_MEAN
                     // add mean
@@ -232,17 +284,18 @@ extern "C"
 __launch_bounds__(WARPS_PER_BLOCK * WARP_SIZE)
 __global__
 void col2im(
-    TYPE * __restrict__ dst, // shape: (2*radius+1, vertical_size, horizontal_size)
-    const float * __restrict__ src, // shape: (vertical_num, horizontal_num, 2*radius+1, block_size, block_size)
+    TYPE * __restrict__ dst,
+    const float * __restrict__ src,
+    const float * __restrict__ window,
+    float scale,
+    float peak,
+    int block_step,
     int width,
     int height
 ) {
-
     int radius = static_cast<int>(RADIUS);
     int block_size = static_cast<int>(BLOCK_SIZE);
-    int block_step = static_cast<int>(BLOCK_STEP);
 
-    // each thread is responsible for a single pixel
     int horizontal_size = calc_pad_size(width, block_size, block_step);
     int horizontal_num = calc_pad_num(width, block_size, block_step);
     int vertical_size = calc_pad_size(height, block_size, block_step);
@@ -253,14 +306,14 @@ void col2im(
     int x = blockIdx.x * blockDim.x + threadIdx.x;
     int y = blockIdx.y * blockDim.y + threadIdx.y;
     if (y < pad_y || y >= pad_y + height || x < pad_x || x >= pad_x + width) {
-        return ;
+        return;
     }
 
     float sum {};
 
-    int i1 = (y - block_size + block_step) / block_step; // i1 is implicitly greater than 0
+    int i1 = (y - block_size + block_step) / block_step;
     int i2 = min(y / block_step, vertical_num - 1);
-    int j1 = (x - block_size + block_step) / block_step; // j1 is implicitly greater than 0
+    int j1 = (x - block_size + block_step) / block_step;
     int j2 = min(x / block_step, horizontal_num - 1);
 
     for (int i = i1; i <= i2; i++) {
@@ -273,7 +326,7 @@ void col2im(
         }
     }
 
-    dst[(radius * vertical_size + y) * horizontal_size + x] = from_float(sum);
+    dst[(radius * vertical_size + y) * horizontal_size + x] = from_float(sum, scale, peak);
 }
 )""";
 

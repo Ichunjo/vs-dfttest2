@@ -58,7 +58,7 @@ static void dft(std::complex<T>* VS_RESTRICT dst, const T_in* VS_RESTRICT src, i
 static bool success(hipError_t result) {
     return result == hipSuccess;
 }
-static bool success(hipfftResult_t result) {
+static bool success(hipfftResult result) {
     return result == HIPFFT_SUCCESS;
 }
 static bool success(hiprtcResult result) {
@@ -69,7 +69,7 @@ static const char* get_error(hipError_t error) {
     return hipGetErrorString(error);
 }
 
-static const char* get_error(hipfftResult_t error) {
+static const char* get_error(hipfftResult error) {
     switch (error) {
     case HIPFFT_SUCCESS:
         return "success";
@@ -77,6 +77,8 @@ static const char* get_error(hipfftResult_t error) {
         return "invalid plan handle";
     case HIPFFT_ALLOC_FAILED:
         return "failed to allocate memory";
+    case HIPFFT_INVALID_TYPE:
+        return "invalid type";
     case HIPFFT_INVALID_VALUE:
         return "invalid value";
     case HIPFFT_INTERNAL_ERROR:
@@ -87,6 +89,8 @@ static const char* get_error(hipfftResult_t error) {
         return "the hipFFT library failed to initialize";
     case HIPFFT_INVALID_SIZE:
         return "invalid transform size";
+    case HIPFFT_UNALIGNED_DATA:
+        return "unaligned data";
     case HIPFFT_INCOMPLETE_PARAMETER_LIST:
         return "missing parameters in call";
     case HIPFFT_INVALID_DEVICE:
@@ -136,10 +140,6 @@ static void hipFreeCustom(hipDeviceptr_t p) {
     showError(hipFree(p));
 }
 
-static void hipModuleUnloadCustom(hipModule_t module) {
-    showError(hipModuleUnload(module));
-}
-
 static void hipfftDestroyCustom(hipfftHandle handle) {
     showError(hipfftDestroy(handle));
 }
@@ -159,16 +159,14 @@ struct node_freer {
     }
 };
 
-template <typename T, auto deleter>
+template <typename T, auto deleter, bool unsafe = false>
     requires std::default_initializable<T> && std::is_trivially_copy_assignable_v<T> && std::convertible_to<T, bool> &&
-             std::invocable<decltype(deleter), T>
+             std::invocable<decltype(deleter), T> && (std::is_pointer_v<T> || unsafe)
 struct Resource {
     T data;
 
     [[nodiscard]] constexpr Resource() noexcept = default;
-
     [[nodiscard]] constexpr Resource(T x) noexcept : data(x) {}
-
     [[nodiscard]] constexpr Resource(Resource&& other) noexcept : data(std::exchange(other.data, T{})) {}
 
     Resource& operator=(Resource&& other) noexcept {
@@ -180,7 +178,6 @@ struct Resource {
     }
 
     Resource operator=(Resource other) = delete;
-
     Resource(const Resource& other) = delete;
 
     constexpr operator T() const noexcept { return data; }
@@ -218,15 +215,14 @@ static int calc_pad_num(int size, int block_size, int block_step) {
 
 template <typename T>
 static void reflection_padding_impl(
-    T* VS_RESTRICT dst,       // shape: (pad_height, pad_width)
-    const T* VS_RESTRICT src, // shape: (height, stride)
+    T* VS_RESTRICT dst,
+    const T* VS_RESTRICT src,
     int width,
     int height,
     int stride,
     int block_size,
     int block_step
 ) {
-
     int pad_width = calc_pad_size(width, block_size, block_step);
     int pad_height = calc_pad_size(height, block_size, block_step);
 
@@ -237,7 +233,6 @@ static void reflection_padding_impl(
         &dst[offset_y * pad_width + offset_x], pad_width * sizeof(T), src, stride * sizeof(T), width * sizeof(T), height
     );
 
-    // copy left and right regions
     for (int y = offset_y; y < offset_y + height; y++) {
         auto dst_line = &dst[y * pad_width];
 
@@ -250,20 +245,18 @@ static void reflection_padding_impl(
         }
     }
 
-    // copy top region
     for (int y = 0; y < offset_y; y++) {
         std::memcpy(&dst[y * pad_width], &dst[(offset_y * 2 - y) * pad_width], pad_width * sizeof(T));
     }
 
-    // copy bottom region
     for (int y = offset_y + height; y < pad_height; y++) {
         std::memcpy(&dst[y * pad_width], &dst[(2 * (offset_y + height) - 2 - y) * pad_width], pad_width * sizeof(T));
     }
 }
 
 static void reflection_padding(
-    uint8_t* VS_RESTRICT dst,       // shape: (pad_height, pad_width)
-    const uint8_t* VS_RESTRICT src, // shape: (height, stride)
+    uint8_t* VS_RESTRICT dst,
+    const uint8_t* VS_RESTRICT src,
     int width,
     int height,
     int stride,
@@ -271,7 +264,6 @@ static void reflection_padding(
     int block_step,
     int bytes_per_sample
 ) {
-
     if (bytes_per_sample == 1) {
         reflection_padding_impl(
             static_cast<uint8_t*>(dst), static_cast<const uint8_t*>(src), width, height, stride, block_size, block_step
@@ -299,57 +291,29 @@ static void reflection_padding(
     }
 }
 
-static std::variant<hipModule_t, std::string> compile(
-    const char* user_kernel,
-    hipDevice_t device,
-    int radius,
-    int block_size,
-    int block_step,
-    bool in_place,
-    int warp_size,
-    int warps_per_block,
-    int sample_type,
-    int bits_per_sample
-) {
+static std::unordered_map<std::string, hipModule_t> g_hip_module_cache;
+static std::mutex g_hip_module_cache_lock;
 
+static std::variant<hipModule_t, std::string> compile(hipDevice_t device) {
     auto set_error = [](const char* error_message) -> std::string { return std::string{error_message}; };
 
     hipDeviceProp_t prop;
     checkError(hipGetDeviceProperties(&prop, device));
 
+    std::string cache_key = prop.gcnArchName;
+
+    {
+        std::lock_guard lock{g_hip_module_cache_lock};
+        auto it = g_hip_module_cache.find(cache_key);
+        if (it != g_hip_module_cache.end()) {
+            return it->second;
+        }
+    }
+
     constexpr bool generate_bitcode = false;
 
-    std::ostringstream kernel_source;
-    kernel_source << "#define RADIUS " << radius << '\n';
-    kernel_source << "#define BLOCK_SIZE " << block_size << '\n';
-    kernel_source << "#define BLOCK_STEP " << block_step << '\n';
-    kernel_source << "#define IN_PLACE " << (int)in_place << '\n';
-    kernel_source << "#define WARP_SIZE " << warp_size << '\n';
-    kernel_source << "#define WARPS_PER_BLOCK " << warps_per_block << '\n';
-    if (sample_type == stInteger) {
-        int bytes_per_sample = bits_per_sample / 8;
-        const char* type = "";
-        if (bytes_per_sample == 1) {
-            type = "unsigned char";
-        } else if (bytes_per_sample == 2) {
-            type = "unsigned short";
-        } else if (bytes_per_sample == 4) {
-            type = "unsigned int";
-        }
-        kernel_source << "#define TYPE " << type << '\n';
-        kernel_source << "#define SCALE " << 1.0 / (1 << (bits_per_sample - 8)) << '\n';
-        kernel_source << "#define PEAK " << ((1 << bits_per_sample) - 1) << '\n';
-    } else if (sample_type == stFloat) {
-        if (bits_per_sample == 32) {
-            kernel_source << "#define TYPE float\n";
-        }
-        kernel_source << "#define SCALE 255.0\n";
-    }
-    kernel_source << user_kernel << '\n';
-    kernel_source << kernel_implementation;
-
     hiprtcProgram program;
-    checkError(hiprtcCreateProgram(&program, kernel_source.str().c_str(), nullptr, 0, nullptr, nullptr));
+    checkError(hiprtcCreateProgram(&program, kernel_implementation, nullptr, 0, nullptr, nullptr));
     Resource<hiprtcProgram*, hiprtcDestroyProgramCustom> destroyer{&program};
 
     const std::string arch_str = std::string("--offload-arch=") + prop.gcnArchName;
@@ -358,7 +322,7 @@ static std::variant<hipModule_t, std::string> compile(
         arch_str.c_str(),
         "-std=c++17",
         "-ffast-math",
-        "-mno-wavefrontsize64", // rdna only
+        "-mno-wavefrontsize64",
     };
 
     auto compilation = hiprtcCompileProgram(program, (int)std::extent_v<decltype(opts)>, opts);
@@ -374,7 +338,7 @@ static std::variant<hipModule_t, std::string> compile(
 
     if (success(compilation)) {
         if (log_size > 1) {
-            std::fprintf(stderr, "nvrtc: %s\n", error_message.c_str());
+            std::fprintf(stderr, "hiprtc: %s\n", error_message.c_str());
         }
     } else {
         return error_message;
@@ -396,11 +360,16 @@ static std::variant<hipModule_t, std::string> compile(
     hipModule_t module;
     checkError(hipModuleLoadData(&module, image.get()));
 
+    {
+        std::lock_guard lock{g_hip_module_cache_lock};
+        g_hip_module_cache[cache_key] = module;
+    }
+
     return module;
 }
 
 struct DFTTestThreadData {
-    uint8_t* h_padded; // shape: (pad_height, pad_width)
+    uint8_t* h_padded;
 };
 
 struct DFTTestData {
@@ -409,37 +378,40 @@ struct DFTTestData {
     int block_size;
     int block_step;
     std::array<bool, 3> process;
-    hipDevice_t device; // device_id
+    hipDevice_t device;
     bool in_place;
+    int zero_mean;
+    int filter_type;
+    float sigma_scalar;
+    int sigma_is_scalar;
+    float sigma2;
+    float pmin;
+    float pmax;
 
     int warp_size;
-
-    // most existing devices contain four schedulers per sm
     int warps_per_block = 4;
 
     Resource<hipStream_t, hipStreamDestroyCustom> stream;
-
     Resource<hipEvent_t, hipEventDestroyCustom> event;
 
-    // shape: (vertical_num, horizontal_num, 2*radius+1, block_size, block_size)
-    Resource<hipDeviceptr_t, hipFreeCustom> d_spatial;
+    // device buffers
+    Resource<hipDeviceptr_t, hipFreeCustom> d_window;
+    Resource<hipDeviceptr_t, hipFreeCustom> d_sigma;
+    Resource<hipDeviceptr_t, hipFreeCustom> d_window_freq;
 
-    // shape: (vertical_num, horizontal_num, 2*radius+1, block_size, block_size/2+1)
+    Resource<hipDeviceptr_t, hipFreeCustom> d_spatial;
     Resource<hipDeviceptr_t, hipFreeCustom> d_frequency;
 
     std::mutex lock;
 
-    // padded shape: (pad_height, pad_width)
-    // (hipFFT handles reference this memory via hipfftSetWorkArea)
     Resource<hipDeviceptr_t, hipFreeCustom> d_work_area_or_padded;
 
-    // 2-D or 3-D, depends on radius
     Resource<hipfftHandle, hipfftDestroyCustom> rfft_handle;
     Resource<hipfftHandle, hipfftDestroyCustom> irfft_handle;
     Resource<hipfftHandle, hipfftDestroyCustom> subsampled_rfft_handle;
     Resource<hipfftHandle, hipfftDestroyCustom> subsampled_irfft_handle;
 
-    Resource<hipModule_t, hipModuleUnloadCustom> module;
+    hipModule_t module;
     hipFunction_t filter_kernel;
     int filter_num_blocks;
     hipFunction_t im2col_kernel;
@@ -515,7 +487,7 @@ static const VSFrame* VS_CC DFTTestGetFrame(
                 ((2 * d->radius + 1) * calc_pad_size(vi->height, d->block_size, d->block_step) *
                  calc_pad_size(vi->width, d->block_size, d->block_step) * vi->format.bytesPerSample);
 
-            checkError(hipHostMalloc((void**)&thread_data.h_padded, padded_size, hipHostMallocNonCoherent));
+            checkError(hipHostMalloc((void**)&thread_data.h_padded, padded_size));
 
             {
                 std::lock_guard _{d->thread_data_lock};
@@ -580,13 +552,31 @@ static const VSFrame* VS_CC DFTTestGetFrame(
             std::lock_guard lock{d->lock};
 
             hipDeviceptr_t d_buffer = d->in_place ? d->d_frequency.data : d->d_spatial.data;
+            int padded_block_size = d->in_place ? (d->block_size / 2 + 1) * 2 : d->block_size;
 
             int padded_bytes = (2 * d->radius + 1) * padded_size_spatial * vi->format.bytesPerSample;
             checkError(
                 hipMemcpyHtoDAsync(d->d_work_area_or_padded.data, thread_data.h_padded, padded_bytes, d->stream)
             );
+
+            float scale = (vi->format.sampleType == stInteger)
+                              ? static_cast<float>(1.0 / (1 << (vi->format.bitsPerSample - 8)))
+                              : 255.0f;
+            float peak = static_cast<float>((1 << vi->format.bitsPerSample) - 1);
+
             {
-                void* params[]{&d_buffer, &d->d_work_area_or_padded.data, &width, &height};
+                void* params[]{
+                    &d_buffer,
+                    &d->d_work_area_or_padded.data,
+                    &d->d_window.data,
+                    &scale,
+                    &d->radius,
+                    &d->block_size,
+                    &d->block_step,
+                    &padded_block_size,
+                    &width,
+                    &height
+                };
                 checkError(hipModuleLaunchKernel(
                     d->im2col_kernel,
                     d->im2col_num_blocks,
@@ -606,7 +596,20 @@ static const VSFrame* VS_CC DFTTestGetFrame(
                 int num_blocks =
                     (calc_pad_num(height, d->block_size, d->block_step) *
                      calc_pad_num(width, d->block_size, d->block_step));
-                void* params[]{&d->d_frequency.data, &num_blocks};
+                void* params[]{
+                    &d->d_frequency.data,
+                    &num_blocks,
+                    &d->radius,
+                    &d->block_size,
+                    &d->d_window_freq.data,
+                    &d->d_sigma.data,
+                    &d->sigma_scalar,
+                    &d->sigma_is_scalar,
+                    &d->sigma2,
+                    &d->pmin,
+                    &d->pmax,
+                    &d->filter_type
+                };
                 checkError(hipModuleLaunchKernel(
                     d->filter_kernel,
                     d->filter_num_blocks,
@@ -623,7 +626,19 @@ static const VSFrame* VS_CC DFTTestGetFrame(
             }
             checkError(hipfftExecC2R(irfft_handle, (hipfftComplex*)d->d_frequency.data, (hipfftReal*)d_buffer));
             {
-                void* params[]{&d->d_work_area_or_padded.data, &d_buffer, &width, &height};
+                void* params[]{
+                    &d->d_work_area_or_padded.data,
+                    &d_buffer,
+                    &d->d_window.data,
+                    &scale,
+                    &peak,
+                    &d->radius,
+                    &d->block_size,
+                    &d->block_step,
+                    &padded_block_size,
+                    &width,
+                    &height
+                };
                 unsigned int vertical_size = calc_pad_size(height, d->block_size, d->block_step);
                 unsigned int horizontal_size = calc_pad_size(width, d->block_size, d->block_step);
                 unsigned int grid_x = (horizontal_size + d->warp_size - 1) / d->warp_size;
@@ -643,28 +658,26 @@ static const VSFrame* VS_CC DFTTestGetFrame(
                 ));
             }
             {
-                unsigned int pad_width = calc_pad_size(width, d->block_size, d->block_step);
-                unsigned int pad_height = calc_pad_size(height, d->block_size, d->block_step);
-                const HIP_MEMCPY3D config{
-                    .srcXInBytes = (pad_width - width) / 2 * vi->format.bytesPerSample,
-                    .srcY = (pad_height - height) / 2,
-                    .srcZ = (unsigned int)d->radius,
-                    .srcMemoryType = hipMemoryTypeDevice,
-                    .srcDevice = d->d_work_area_or_padded.data,
-                    .srcPitch = pad_width * vi->format.bytesPerSample,
-                    .srcHeight = pad_height,
-                    .dstXInBytes = (pad_width - width) / 2 * vi->format.bytesPerSample,
-                    .dstY = (pad_height - height) / 2,
-                    .dstZ = 0, // vsh::bitblt(dstp) copies from the 0-th slice
-                    .dstMemoryType = hipMemoryTypeHost,
-                    .dstHost = thread_data.h_padded,
-                    .dstPitch = pad_width * vi->format.bytesPerSample,
-                    .dstHeight = pad_height,
-                    .WidthInBytes = (unsigned int)width * vi->format.bytesPerSample,
-                    .Height = (unsigned int)height,
-                    .Depth = 1
+                size_t pad_width = calc_pad_size(width, d->block_size, d->block_step);
+                size_t pad_height = calc_pad_size(height, d->block_size, d->block_step);
+                const hipMemcpy3DParms config{
+                    .srcArray = nullptr,
+                    .srcPos = make_hipPos(
+                        (pad_width - width) / 2 * vi->format.bytesPerSample, (pad_height - height) / 2, d->radius
+                    ),
+                    .srcPtr = make_hipPitchedPtr(
+                        d->d_work_area_or_padded.data, pad_width * vi->format.bytesPerSample, pad_width, pad_height
+                    ),
+                    .dstArray = nullptr,
+                    .dstPos =
+                        make_hipPos((pad_width - width) / 2 * vi->format.bytesPerSample, (pad_height - height) / 2, 0),
+                    .dstPtr = make_hipPitchedPtr(
+                        thread_data.h_padded, pad_width * vi->format.bytesPerSample, pad_width, pad_height
+                    ),
+                    .extent = make_hipExtent((size_t)width * vi->format.bytesPerSample, (size_t)height, 1),
+                    .kind = hipMemcpyDeviceToHost
                 };
-                checkError(hipDrvMemcpy3DAsync(&config, d->stream));
+                checkError(hipMemcpy3DAsync(&config, d->stream));
             }
 
             checkError(hipEventRecord(d->event, d->stream));
@@ -697,6 +710,8 @@ static void VS_CC DFTTestFree(void* instanceData, VSCore* core, const VSAPI* vsa
 
     vsapi->freeNode(d->node);
 
+    showError(hipSetDevice(d->device));
+
     for (const auto& [_, thread_data] : d->thread_data) {
         showError(hipHostFree(thread_data.h_padded));
     }
@@ -712,19 +727,14 @@ DFTTestCreate(const VSMap* in, VSMap* out, void* userData, VSCore* core, const V
     d->node = vsapi->mapGetNode(in, "clip", 0, nullptr);
     node_freer node_freer{vsapi, d->node};
 
-    auto set_error = [vsapi, out](const char* error_message) -> void {
-        vsapi->mapSetError(out, error_message);
-        return;
-    };
+    auto set_error = [vsapi, out](const char* error_message) -> void { vsapi->mapSetError(out, error_message); };
 
     auto vi = vsapi->getVideoInfo(d->node);
     if (!vsh::isConstantVideoFormat(vi)) {
         return set_error("only constant format input is supported");
     }
 
-    auto user_kernel = vsapi->mapGetData(in, "kernel", 0, nullptr);
-
-    int error;
+    int error = 0;
 
     d->radius = vsh::int64ToIntS(vsapi->mapGetInt(in, "radius", 0, &error));
     if (error) {
@@ -739,6 +749,31 @@ DFTTestCreate(const VSMap* in, VSMap* out, void* userData, VSCore* core, const V
     d->block_step = vsh::int64ToIntS(vsapi->mapGetInt(in, "block_step", 0, &error));
     if (error) {
         d->block_step = d->block_size;
+    }
+
+    d->zero_mean = vsh::int64ToIntS(vsapi->mapGetInt(in, "zero_mean", 0, &error));
+    if (error) {
+        d->zero_mean = 0;
+    }
+
+    d->filter_type = vsh::int64ToIntS(vsapi->mapGetInt(in, "filter_type", 0, &error));
+    if (error) {
+        d->filter_type = 0;
+    }
+
+    d->sigma2 = static_cast<float>(vsapi->mapGetFloat(in, "sigma2", 0, &error));
+    if (error) {
+        d->sigma2 = 8.0f;
+    }
+
+    d->pmin = static_cast<float>(vsapi->mapGetFloat(in, "pmin", 0, &error));
+    if (error) {
+        d->pmin = 0.0f;
+    }
+
+    d->pmax = static_cast<float>(vsapi->mapGetFloat(in, "pmax", 0, &error));
+    if (error) {
+        d->pmax = 500.0f;
     }
 
     int num_planes_args = vsapi->mapNumElements(in, "planes");
@@ -759,30 +794,84 @@ DFTTestCreate(const VSMap* in, VSMap* out, void* userData, VSCore* core, const V
 
     d->in_place = !!(vsapi->mapGetInt(in, "in_place", 0, &error));
     if (error) {
-        d->in_place = false;
+        d->in_place = true;
     }
 
-    d->device = vsh::int64ToIntS(vsapi->mapGetInt(in, "device_id", 0, &error));
+    int device_id = vsh::int64ToIntS(vsapi->mapGetInt(in, "device_id", 0, &error));
     if (error) {
-        d->device = 0;
+        device_id = 0;
     }
 
+    // Read window array
+    int num_window = vsapi->mapNumElements(in, "window");
+    if (num_window <= 0) {
+        return set_error("window cannot be empty");
+    }
+    const double* window_raw = vsapi->mapGetFloatArray(in, "window", nullptr);
+    std::vector<float> window_floats(num_window);
+    for (int i = 0; i < num_window; ++i) {
+        window_floats[i] = static_cast<float>(window_raw[i]);
+    }
+
+    // Read sigma array
+    int num_sigma = vsapi->mapNumElements(in, "sigma");
+    if (num_sigma <= 0) {
+        return set_error("sigma cannot be empty");
+    }
+    const double* sigma_raw = vsapi->mapGetFloatArray(in, "sigma", nullptr);
+    std::vector<float> sigma_floats(num_sigma);
+    for (int i = 0; i < num_sigma; ++i) {
+        sigma_floats[i] = static_cast<float>(sigma_raw[i]);
+    }
+    if (num_sigma == 1) {
+        d->sigma_scalar = sigma_floats[0];
+        d->sigma_is_scalar = 1;
+    } else {
+        d->sigma_scalar = 0.0f;
+        d->sigma_is_scalar = 0;
+    }
+
+    // Read window_freq if zero_mean enabled
+    std::vector<float> window_freq_floats;
+    if (d->zero_mean) {
+        int num_wf = vsapi->mapNumElements(in, "window_freq");
+        if (num_wf <= 0) {
+            return set_error("window_freq required when zero_mean is enabled");
+        }
+        const double* wf_raw = vsapi->mapGetFloatArray(in, "window_freq", nullptr);
+        window_freq_floats.resize(num_wf);
+        for (int i = 0; i < num_wf; ++i) {
+            window_freq_floats[i] = static_cast<float>(wf_raw[i]);
+        }
+    }
+
+    checkError(hipInit(0));
+    checkError(hipDeviceGet(&d->device, device_id));
     checkError(hipSetDevice(d->device));
 
-    checkError(hipDeviceGetAttribute(&d->warp_size, hipDeviceAttributeWarpSize, d->device));
+    hipDeviceProp_t prop;
+    checkError(hipGetDeviceProperties(&prop, d->device));
+    d->warp_size = prop.warpSize;
 
-    auto compilation = compile(
-        user_kernel,
-        d->device,
-        d->radius,
-        d->block_size,
-        d->block_step,
-        d->in_place,
-        d->warp_size,
-        d->warps_per_block,
-        vi->format.sampleType,
-        vi->format.bitsPerSample
-    );
+    // Allocate & copy window buffer
+    checkError(hipMalloc(&d->d_window.data, window_floats.size() * sizeof(float)));
+    checkError(hipMemcpyHtoD(d->d_window.data, window_floats.data(), window_floats.size() * sizeof(float)));
+
+    // Allocate & copy sigma buffer if array
+    if (!d->sigma_is_scalar) {
+        checkError(hipMalloc(&d->d_sigma.data, sigma_floats.size() * sizeof(float)));
+        checkError(hipMemcpyHtoD(d->d_sigma.data, sigma_floats.data(), sigma_floats.size() * sizeof(float)));
+    }
+
+    // Allocate & copy window_freq buffer if zero_mean
+    if (d->zero_mean) {
+        checkError(hipMalloc(&d->d_window_freq.data, window_freq_floats.size() * sizeof(float)));
+        checkError(
+            hipMemcpyHtoD(d->d_window_freq.data, window_freq_floats.data(), window_freq_floats.size() * sizeof(float))
+        );
+    }
+
+    auto compilation = compile(d->device);
     if (std::holds_alternative<std::string>(compilation)) {
         std::ostringstream message;
         message << '[' << __LINE__ << "] compile(): " << std::get<std::string>(compilation);
@@ -791,38 +880,33 @@ DFTTestCreate(const VSMap* in, VSMap* out, void* userData, VSCore* core, const V
     }
     d->module = std::get<hipModule_t>(compilation);
 
-    int num_sms;
-    checkError(hipDeviceGetAttribute(&num_sms, hipDeviceAttributeMultiprocessorCount, d->device));
+    const char* type_str = (vi->format.sampleType == stFloat) ? "f32" : (vi->format.bytesPerSample == 1 ? "u8" : "u16");
+    std::string im2col_name = std::string("im2col_") + type_str;
+    std::string filter_name = std::string("frequency_filtering_zm") + (d->zero_mean ? "1" : "0");
+    std::string col2im_name = std::string("col2im_") + type_str;
 
-    checkError(hipModuleGetFunction(&d->filter_kernel, d->module, "frequency_filtering"));
-    {
-        int max_blocks_per_sm;
-        checkError(hipModuleOccupancyMaxActiveBlocksPerMultiprocessor(
-            &max_blocks_per_sm, d->filter_kernel, d->warps_per_block * d->warp_size, 0
-        ));
-        d->filter_num_blocks = num_sms * max_blocks_per_sm;
-    }
+    checkError(hipModuleGetFunction(&d->im2col_kernel, d->module, im2col_name.c_str()));
+    checkError(hipModuleGetFunction(&d->filter_kernel, d->module, filter_name.c_str()));
+    checkError(hipModuleGetFunction(&d->col2im_kernel, d->module, col2im_name.c_str()));
 
-    checkError(hipModuleGetFunction(&d->im2col_kernel, d->module, "im2col"));
-    {
-        int max_blocks_per_sm;
-        checkError(hipModuleOccupancyMaxActiveBlocksPerMultiprocessor(
-            &max_blocks_per_sm, d->im2col_kernel, d->warps_per_block * d->warp_size, 0
-        ));
-        d->im2col_num_blocks = num_sms * max_blocks_per_sm;
-    }
+    int num_sms = prop.multiProcessorCount;
+    int max_blocks_per_sm;
+    checkError(hipOccupancyMaxActiveBlocksPerMultiprocessor(
+        &max_blocks_per_sm, d->filter_kernel, d->warps_per_block * d->warp_size, 0
+    ));
+    d->filter_num_blocks = num_sms * max_blocks_per_sm;
 
-    checkError(hipModuleGetFunction(&d->col2im_kernel, d->module, "col2im"));
+    checkError(hipOccupancyMaxActiveBlocksPerMultiprocessor(
+        &max_blocks_per_sm, d->im2col_kernel, d->warps_per_block * d->warp_size, 0
+    ));
+    d->im2col_num_blocks = num_sms * max_blocks_per_sm;
 
     checkError(hipStreamCreateWithFlags(&d->stream.data, hipStreamNonBlocking));
-
     checkError(hipEventCreateWithFlags(&d->event.data, hipEventBlockingSync | hipEventDisableTiming));
 
     size_t padded_bytes =
         ((2 * d->radius + 1) * calc_pad_size(vi->height, d->block_size, d->block_step) *
          calc_pad_size(vi->width, d->block_size, d->block_step) * vi->format.bytesPerSample);
-    // merge allocation to fft's work_area
-    // checkError(cuMemAlloc(&d->d_padded.data, padded_bytes));
 
     if (!d->in_place) {
         size_t spatial_bytes =
@@ -858,7 +942,7 @@ DFTTestCreate(const VSMap* in, VSMap* out, void* userData, VSCore* core, const V
             checkError(hipfftGetSize(d->rfft_handle, &work_size));
             max_work_size = std::max(max_work_size, work_size);
         }
-        checkError(hipfftSetWorkArea(d->rfft_handle, nullptr)); // free work area
+        checkError(hipfftSetWorkArea(d->rfft_handle, nullptr));
         checkError(hipfftSetStream(d->rfft_handle, d->stream));
 
         checkError(
@@ -869,7 +953,7 @@ DFTTestCreate(const VSMap* in, VSMap* out, void* userData, VSCore* core, const V
             checkError(hipfftGetSize(d->irfft_handle, &work_size));
             max_work_size = std::max(max_work_size, work_size);
         }
-        checkError(hipfftSetWorkArea(d->irfft_handle, nullptr)); // free work area
+        checkError(hipfftSetWorkArea(d->irfft_handle, nullptr));
         checkError(hipfftSetStream(d->irfft_handle, d->stream));
 
         if (vi->format.subSamplingW != 0 || vi->format.subSamplingH != 0) {
@@ -895,7 +979,7 @@ DFTTestCreate(const VSMap* in, VSMap* out, void* userData, VSCore* core, const V
                 checkError(hipfftGetSize(d->subsampled_rfft_handle, &work_size));
                 max_work_size = std::max(max_work_size, work_size);
             }
-            checkError(hipfftSetWorkArea(d->subsampled_rfft_handle, nullptr)); // free work area
+            checkError(hipfftSetWorkArea(d->subsampled_rfft_handle, nullptr));
             checkError(hipfftSetStream(d->subsampled_rfft_handle, d->stream));
 
             checkError(hipfftPlanMany(
@@ -916,7 +1000,7 @@ DFTTestCreate(const VSMap* in, VSMap* out, void* userData, VSCore* core, const V
                 checkError(hipfftGetSize(d->subsampled_irfft_handle, &work_size));
                 max_work_size = std::max(max_work_size, work_size);
             }
-            checkError(hipfftSetWorkArea(d->subsampled_irfft_handle, nullptr)); // free work area
+            checkError(hipfftSetWorkArea(d->subsampled_irfft_handle, nullptr));
             checkError(hipfftSetStream(d->subsampled_irfft_handle, d->stream));
         }
 
@@ -1013,53 +1097,12 @@ static void VS_CC RDFT(const VSMap* in, VSMap* out, void* userData, VSCore* core
             dft(&output[i], &output2[i], shape[0], shape[1] * (shape[2] / 2 + 1));
         }
 
-        vsapi->mapSetFloatArray(out, "ret", (const double*)output2.get(), complex_size * 2);
-    }
-}
-
-static void VS_CC ToSingle(const VSMap* in, VSMap* out, void* userData, VSCore* core, const VSAPI* vsapi) noexcept {
-
-    auto data = vsapi->mapGetFloatArray(in, "data", nullptr);
-    int num = vsapi->mapNumElements(in, "data");
-
-    auto converted_data = std::make_unique<double[]>(num);
-    for (int i = 0; i < num; i++) {
-        converted_data[i] = static_cast<float>(data[i]);
-    }
-
-    if (num == 1) {
-        vsapi->mapSetFloat(out, "ret", converted_data[0], maReplace);
-    } else {
-        vsapi->mapSetFloatArray(out, "ret", converted_data.get(), num);
+        vsapi->mapSetFloatArray(out, "ret", (const double*)output.get(), complex_size * 2);
     }
 }
 
 static void Version(const VSMap*, VSMap* out, void*, VSCore*, const VSAPI* vsapi) {
     vsapi->mapSetData(out, "version", PLUGIN_VERSION_STRING, -1, dtUtf8, maReplace);
-
-    std::ostringstream result;
-    std::string temp;
-    temp = std::to_string(hipfftVersionMajor);
-    if (temp.size() == 1) {
-        result << '0';
-    }
-    result << temp;
-    temp = std::to_string(hipfftVersionMinor);
-    if (temp.size() == 1) {
-        result << '0';
-    }
-    result << temp;
-    temp = std::to_string(hipfftVersionPatch);
-    if (temp.size() == 1) {
-        result << '0';
-    }
-    result << temp;
-    vsapi->mapSetInt(out, "hipfft_version", std::stoi(result.str()), maReplace);
-
-    int hipfft_version;
-    if (hipfftGetVersion(&hipfft_version) == HIPFFT_SUCCESS) {
-        vsapi->mapSetInt(out, "rocfft_version", hipfft_version, maReplace);
-    }
 }
 
 VS_EXTERNAL_API(void)
@@ -1067,7 +1110,7 @@ VapourSynthPluginInit2(VSPlugin* plugin, const VSPLUGINAPI* vspapi) {
     vspapi->configPlugin(
         "io.github.amusementclub.dfttest2_hip",
         "dfttest2_hip",
-        "DFTTest2 (HIP)",
+        "DFTTest2 (hipFFT)",
         VS_MAKE_VERSION(PLUGIN_VERSION_MAJOR, PLUGIN_VERSION_MINOR),
         VAPOURSYNTH_API_VERSION,
         0,
@@ -1077,10 +1120,17 @@ VapourSynthPluginInit2(VSPlugin* plugin, const VSPLUGINAPI* vspapi) {
     vspapi->registerFunction(
         "DFTTest",
         "clip:vnode;"
-        "kernel:data[];"
+        "window:float[];"
+        "sigma:float[];"
+        "sigma2:float;"
+        "pmin:float;"
+        "pmax:float;"
+        "filter_type:int;"
         "radius:int:opt;"
         "block_size:int:opt;"
         "block_step:int:opt;"
+        "zero_mean:int:opt;"
+        "window_freq:float[]:opt;"
         "planes:int[]:opt;"
         "in_place:int:opt;"
         "device_id:int:opt;",
@@ -1099,8 +1149,6 @@ VapourSynthPluginInit2(VSPlugin* plugin, const VSPLUGINAPI* vspapi) {
         nullptr,
         plugin
     );
-
-    vspapi->registerFunction("ToSingle", "data:float[];", "any", ToSingle, nullptr, plugin);
 
     vspapi->registerFunction("Version", "", "any", Version, nullptr, plugin);
 }

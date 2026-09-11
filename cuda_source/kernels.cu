@@ -1,26 +1,22 @@
-#ifndef KERNEL_HPP
-#define KERNEL_HPP
-
-static const auto kernel_implementation = R"""(
+#include <algorithm>
+#include <cstdint>
+#include <cuda_runtime.h>
 #include <type_traits>
 
-__device__
-static int calc_pad_size(int size, int block_size, int block_step) {
-    return size + ((size % block_size) ? block_size - size % block_size : 0) + max(block_size - block_step, block_step) * 2;
+__device__ __forceinline__ static int calc_pad_size(int size, int block_size, int block_step) {
+    return size + ((size % block_size) ? block_size - size % block_size : 0) +
+           max(block_size - block_step, block_step) * 2;
 }
 
-__device__
-static int calc_pad_num(int size, int block_size, int block_step) {
+__device__ __forceinline__ static int calc_pad_num(int size, int block_size, int block_step) {
     return (calc_pad_size(size, block_size, block_step) - block_size) / block_step + 1;
 }
 
-template <typename TYPE>
-__device__ __forceinline__ static float to_float(TYPE x, float scale) {
+template <typename TYPE> __device__ __forceinline__ static float to_float(TYPE x, float scale) {
     return static_cast<float>(x) * scale;
 }
 
-template <typename TYPE>
-__device__ __forceinline__ static TYPE from_float(float x, float scale, float peak) {
+template <typename TYPE> __device__ __forceinline__ static TYPE from_float(float x, float scale, float peak) {
     if constexpr (std::is_same_v<TYPE, float>) {
         return x / scale;
     } else {
@@ -104,7 +100,7 @@ __device__ __forceinline__ void im2col_impl(
     int vertical_size = calc_pad_size(height, block_size, block_step);
     int num_blocks = vertical_num * horizontal_num;
 
-    int warp_size = warpSize;
+    constexpr int warp_size = 32;
     int warp_id = threadIdx.x / warp_size;
     int lane_id = threadIdx.x % warp_size;
     int warps_per_block = blockDim.x / warp_size;
@@ -144,7 +140,7 @@ __device__ __forceinline__ void frequency_filtering_impl(
     int block_size_2d = block_size_1d * block_size_x;
     int block_size_3d = (2 * radius + 1) * block_size_2d;
 
-    int warp_size = warpSize;
+    constexpr int warp_size = 32;
     int warp_id = threadIdx.x / warp_size;
     int lane_id = threadIdx.x % warp_size;
     int warps_per_block = blockDim.x / warp_size;
@@ -155,7 +151,7 @@ __device__ __forceinline__ void frequency_filtering_impl(
             if (lane_id == 0) {
                 gf = data[i * block_size_3d].x / window_freq[0];
             }
-            gf = __shfl(gf, 0);
+            gf = __shfl_sync(0xFFFFFFFF, gf, 0);
         }
 
         for (int j = lane_id; j < block_size_3d; j += warp_size) {
@@ -164,6 +160,7 @@ __device__ __forceinline__ void frequency_filtering_impl(
             [[maybe_unused]] float val1 = 0.0f;
             [[maybe_unused]] float val2 = 0.0f;
             if constexpr (ZERO_MEAN) {
+                // remove mean
                 val1 = gf * window_freq[j * 2];
                 val2 = gf * window_freq[j * 2 + 1];
                 local_data.x -= val1;
@@ -248,10 +245,10 @@ __device__ __forceinline__ void col2im_impl(
     dst[(radius * vertical_size + y) * horizontal_size + x] = from_float<TYPE>(sum, scale, peak);
 }
 
-// im2col
-extern "C" __launch_bounds__(256) __global__ void im2col_u8(
+// im2col exports
+extern "C" __launch_bounds__(128) __global__ void im2col_u8(
     float* __restrict__ dstp,
-    const unsigned char* __restrict__ srcp,
+    const uint8_t* __restrict__ srcp,
     const float* __restrict__ window,
     float scale,
     int radius,
@@ -261,12 +258,12 @@ extern "C" __launch_bounds__(256) __global__ void im2col_u8(
     int width,
     int height
 ) {
-    im2col_impl<unsigned char>(dstp, srcp, window, scale, radius, block_size, block_step, padded_block_size, width, height);
+    im2col_impl<uint8_t>(dstp, srcp, window, scale, radius, block_size, block_step, padded_block_size, width, height);
 }
 
-extern "C" __launch_bounds__(256) __global__ void im2col_u16(
+extern "C" __launch_bounds__(128) __global__ void im2col_u16(
     float* __restrict__ dstp,
-    const unsigned short* __restrict__ srcp,
+    const uint16_t* __restrict__ srcp,
     const float* __restrict__ window,
     float scale,
     int radius,
@@ -276,10 +273,10 @@ extern "C" __launch_bounds__(256) __global__ void im2col_u16(
     int width,
     int height
 ) {
-    im2col_impl<unsigned short>(dstp, srcp, window, scale, radius, block_size, block_step, padded_block_size, width, height);
+    im2col_impl<uint16_t>(dstp, srcp, window, scale, radius, block_size, block_step, padded_block_size, width, height);
 }
 
-extern "C" __launch_bounds__(256) __global__ void im2col_f32(
+extern "C" __launch_bounds__(128) __global__ void im2col_f32(
     float* __restrict__ dstp,
     const float* __restrict__ srcp,
     const float* __restrict__ window,
@@ -294,8 +291,8 @@ extern "C" __launch_bounds__(256) __global__ void im2col_f32(
     im2col_impl<float>(dstp, srcp, window, scale, radius, block_size, block_step, padded_block_size, width, height);
 }
 
-// frequency_filtering
-extern "C" __launch_bounds__(256) __global__ void frequency_filtering_zm0(
+// frequency_filtering exports
+extern "C" __launch_bounds__(128) __global__ void frequency_filtering_zm0(
     float2* __restrict__ data,
     int num_blocks,
     int radius,
@@ -310,11 +307,22 @@ extern "C" __launch_bounds__(256) __global__ void frequency_filtering_zm0(
     int filter_type
 ) {
     frequency_filtering_impl<false>(
-        data, num_blocks, radius, block_size_1d, window_freq, sigma_array, sigma_scalar, sigma_is_scalar, sigma2, pmin, pmax, filter_type
+        data,
+        num_blocks,
+        radius,
+        block_size_1d,
+        window_freq,
+        sigma_array,
+        sigma_scalar,
+        sigma_is_scalar,
+        sigma2,
+        pmin,
+        pmax,
+        filter_type
     );
 }
 
-extern "C" __launch_bounds__(256) __global__ void frequency_filtering_zm1(
+extern "C" __launch_bounds__(128) __global__ void frequency_filtering_zm1(
     float2* __restrict__ data,
     int num_blocks,
     int radius,
@@ -329,13 +337,24 @@ extern "C" __launch_bounds__(256) __global__ void frequency_filtering_zm1(
     int filter_type
 ) {
     frequency_filtering_impl<true>(
-        data, num_blocks, radius, block_size_1d, window_freq, sigma_array, sigma_scalar, sigma_is_scalar, sigma2, pmin, pmax, filter_type
+        data,
+        num_blocks,
+        radius,
+        block_size_1d,
+        window_freq,
+        sigma_array,
+        sigma_scalar,
+        sigma_is_scalar,
+        sigma2,
+        pmin,
+        pmax,
+        filter_type
     );
 }
 
-// col2im
-extern "C" __launch_bounds__(256) __global__ void col2im_u8(
-    unsigned char* __restrict__ dst,
+// col2im exports
+extern "C" __launch_bounds__(128) __global__ void col2im_u8(
+    uint8_t* __restrict__ dst,
     const float* __restrict__ src,
     const float* __restrict__ window,
     float scale,
@@ -347,11 +366,13 @@ extern "C" __launch_bounds__(256) __global__ void col2im_u8(
     int width,
     int height
 ) {
-    col2im_impl<unsigned char>(dst, src, window, scale, peak, radius, block_size, block_step, padded_block_size, width, height);
+    col2im_impl<uint8_t>(
+        dst, src, window, scale, peak, radius, block_size, block_step, padded_block_size, width, height
+    );
 }
 
-extern "C" __launch_bounds__(256) __global__ void col2im_u16(
-    unsigned short* __restrict__ dst,
+extern "C" __launch_bounds__(128) __global__ void col2im_u16(
+    uint16_t* __restrict__ dst,
     const float* __restrict__ src,
     const float* __restrict__ window,
     float scale,
@@ -363,10 +384,12 @@ extern "C" __launch_bounds__(256) __global__ void col2im_u16(
     int width,
     int height
 ) {
-    col2im_impl<unsigned short>(dst, src, window, scale, peak, radius, block_size, block_step, padded_block_size, width, height);
+    col2im_impl<uint16_t>(
+        dst, src, window, scale, peak, radius, block_size, block_step, padded_block_size, width, height
+    );
 }
 
-extern "C" __launch_bounds__(256) __global__ void col2im_f32(
+extern "C" __launch_bounds__(128) __global__ void col2im_f32(
     float* __restrict__ dst,
     const float* __restrict__ src,
     const float* __restrict__ window,
@@ -381,6 +404,3 @@ extern "C" __launch_bounds__(256) __global__ void col2im_f32(
 ) {
     col2im_impl<float>(dst, src, window, scale, peak, radius, block_size, block_step, padded_block_size, width, height);
 }
-)""";
-
-#endif // KERNEL_HPP

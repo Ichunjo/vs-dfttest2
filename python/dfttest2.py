@@ -2,7 +2,6 @@ import itertools
 import math
 import sys
 from collections.abc import Callable, Sequence
-from string import Template
 from typing import Any, Literal
 
 from vapoursynth import SampleType, VideoNode, core
@@ -379,7 +378,7 @@ def DFTTest2(
             **kwargs,
         )
 
-    if isinstance(backend_inst, Backend.NVRTC):
+    if isinstance(backend_inst, (Backend.NVRTC, Backend.HIPRTC)):
         sigma_val = [sigma_norm] if not isinstance(sigma_norm, list) else sigma_norm
         return plugin.DFTTest(
             clip,
@@ -399,97 +398,27 @@ def DFTTest2(
             num_streams=backend_inst.num_streams,
         )
 
-    to_single = plugin.ToSingle
-    sigma_str = (
-        to_single(sigma_norm) if not isinstance(sigma_norm, list) else ",".join(str(to_single(x)) for x in sigma_norm)
-    )
+    if isinstance(backend_inst, (Backend.cuFFT, Backend.hipFFT)):
+        sigma_val = [sigma_norm] if not isinstance(sigma_norm, list) else sigma_norm
+        return plugin.DFTTest(
+            clip,
+            window=window,
+            sigma=sigma_val,
+            sigma2=sigma2,
+            pmin=pmin,
+            pmax=pmax,
+            filter_type=filter_type,
+            radius=radius,
+            block_size=block_size,
+            block_step=block_step,
+            zero_mean=int(zero_mean),
+            window_freq=window_freq if zero_mean else None,
+            planes=planes,
+            in_place=int(backend_inst.in_place),
+            device_id=backend_inst.device_id,
+        )
 
-    kernel = Template(
-        """
-    #define FILTER_TYPE ${filter_type}
-    #define ZERO_MEAN ${zero_mean}
-    #define SIGMA_IS_SCALAR ${sigma_is_scalar}
-
-    #if ZERO_MEAN
-    __device__ static const float window_freq[] { ${window_freq} };
-    #endif // ZERO_MEAN
-
-    __device__ static const float window[] { ${window} };
-
-    __device__
-    static void filter(float2 & value, int x, int y, int t) {
-    #if SIGMA_IS_SCALAR
-        float sigma = static_cast<float>(${sigma});
-    #else // SIGMA_IS_SCALAR
-        __device__ static const float sigma_array[] { ${sigma} };
-        float sigma = sigma_array[(t * BLOCK_SIZE + y) * (BLOCK_SIZE / 2 + 1) + x];
-    #endif // SIGMA_IS_SCALAR
-        [[maybe_unused]] float sigma2 = static_cast<float>(${sigma2});
-        [[maybe_unused]] float pmin = static_cast<float>(${pmin});
-        [[maybe_unused]] float pmax = static_cast<float>(${pmax});
-        [[maybe_unused]] float multiplier {};
-
-    #if FILTER_TYPE == 2
-        value.x *= sigma;
-        value.y *= sigma;
-        return ;
-    #endif
-
-        float psd = value.x * value.x + value.y * value.y;
-
-    #if FILTER_TYPE == 1
-        if (psd < sigma) {
-            value.x = 0.0f;
-            value.y = 0.0f;
-        }
-        return ;
-    #elif FILTER_TYPE == 0
-        multiplier = fmaxf((psd - sigma) / (psd + 1e-15f), 0.0f);
-    #elif FILTER_TYPE == 3
-        if (psd >= pmin && psd <= pmax) {
-            multiplier = sigma;
-        } else {
-            multiplier = sigma2;
-        }
-    #elif FILTER_TYPE == 4
-        multiplier = sigma * sqrtf(psd * (pmax / ((psd + pmin) * (psd + pmax) + 1e-15f)));
-    #elif FILTER_TYPE == 5
-        multiplier = powf(fmaxf((psd - sigma) / (psd + 1e-15f), 0.0f), pmin);
-    #else
-        multiplier = sqrtf(fmaxf((psd - sigma) / (psd + 1e-15f), 0.0f));
-    #endif
-
-        value.x *= multiplier;
-        value.y *= multiplier;
-    }
-    """
-    ).substitute(
-        sigma_is_scalar=int(not isinstance(sigma_norm, list)),
-        sigma=sigma_str,
-        sigma2=to_single(sigma2),
-        pmin=to_single(pmin),
-        pmax=to_single(pmax),
-        filter_type=int(filter_type),
-        window_freq=",".join(str(to_single(x)) for x in window_freq),
-        zero_mean=int(zero_mean),
-        window=",".join(str(to_single(x)) for x in window),
-    )
-
-    gpu_kwargs = (
-        {"in_place": backend_inst.in_place, "device_id": backend_inst.device_id}
-        if isinstance(backend_inst, (Backend.cuFFT, Backend.hipFFT))
-        else {"in_place": False, "device_id": backend_inst.device_id, "num_streams": backend_inst.num_streams}
-    )
-
-    return plugin.DFTTest(
-        clip,
-        kernel=kernel,
-        radius=radius,
-        block_size=block_size,
-        block_step=block_step,
-        planes=planes,
-        **gpu_kwargs,
-    )
+    raise TypeError(f"Unknown backend: {backend_inst}")
 
 
 def flatten(data: LocationData | None) -> list[float] | None:
